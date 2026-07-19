@@ -286,10 +286,10 @@ function App() {
       </Card>
 
       <Card title="Camera">
-        <div className="overflow-hidden rounded-md bg-black">
+        <div className="mx-auto flex max-w-[280px] justify-center overflow-hidden rounded-md bg-black">
           <video
             ref={videoRef}
-            className="w-full"
+            className="aspect-video w-full max-w-[280px]"
             playsInline
             muted
             style={{ transform: "scaleX(-1)" }}
@@ -338,28 +338,6 @@ function App() {
         <p className="mt-2 text-[11px] text-slate-500">Focal scale: {focalScale.toFixed(3)}</p>
       </Card>
 
-      <Card title="Recording">
-        {!recording ? (
-          <Button onClick={startRecording} disabled={!cameraOn} className="w-full">
-            Start recording
-          </Button>
-        ) : (
-          <Button onClick={stopRecording} variant="danger" className="w-full">
-            Stop recording
-          </Button>
-        )}
-        <p className="mt-2 text-xs text-slate-400">
-          Samples: <span className="font-mono">{samplesRef.current.length}</span>
-        </p>
-        <Button
-          onClick={downloadCsv}
-          variant="secondary"
-          className="mt-3 w-full"
-          disabled={!samples.length}
-        >
-          Download CSV
-        </Button>
-      </Card>
     </div>
   );
 
@@ -418,6 +396,20 @@ function App() {
         />
       </Card>
 
+      <Card title="Data and export">
+        <Button
+          onClick={downloadCsv}
+          variant="secondary"
+          className="w-full"
+          disabled={!samples.length}
+        >
+          Download CSV
+        </Button>
+        <p className="mt-2 text-xs text-slate-400">
+          Samples captured: <span className="font-mono">{samplesRef.current.length}</span>
+        </p>
+      </Card>
+
       <Card title="Regression">
         <p className="text-xs text-slate-400">
           Shift-drag (or right-drag) the graph to select a region.
@@ -465,15 +457,13 @@ function App() {
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {!cameraOn ? (
-              <Button onClick={startCamera} variant="secondary">
-                Start camera
-              </Button>
-            ) : (
-              <p className="text-xs text-slate-500">
-                {modelReady ? "Camera ready ✓" : "Loading face model…"}
-              </p>
-            )}
+            <Button
+              onClick={recording ? stopRecording : startRecording}
+              variant={recording ? "danger" : "secondary"}
+              disabled={!cameraOn}
+            >
+              {recording ? "Stop recording" : "Start recording"}
+            </Button>
             <Button onClick={toggleGraphFullscreen} variant="secondary">
               {isGraphFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </Button>
@@ -556,7 +546,7 @@ function App() {
                   }}
                   className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "instructions" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
                 >
-                  <span>Instructions and Camera setup 📸</span>
+                  <span>Camera Setup 📸</span>
                 </button>
                 <button
                   onClick={() => {
@@ -565,7 +555,7 @@ function App() {
                   }}
                   className={`mt-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "settings" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
                 >
-                  <span>Target Graph Settings and Tools 🎯</span>
+                  <span>Graph Settings and Data 🎯</span>
                 </button>
                 <button
                   onClick={() => {
@@ -574,7 +564,7 @@ function App() {
                   }}
                   className={`mt-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "graph" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
                 >
-                  <span>Focused Graph 📈</span>
+                  <span>Motion Graph 📈</span>
                 </button>
               </div>
             )}
