@@ -48,6 +48,34 @@ interface Sample {
   d: number;
 }
 
+interface TrialRecord {
+  id: number;
+  label: string;
+  samples: Sample[];
+  targetName: string;
+  mode: MotionMode;
+  difficulty: Difficulty;
+}
+
+function pearsonCorrelation(a: SeriesPoint[], b: SeriesPoint[]): number | null {
+  if (!a.length || !b.length || a.length !== b.length) return null;
+  const meanA = a.reduce((sum, p) => sum + p.y, 0) / a.length;
+  const meanB = b.reduce((sum, p) => sum + p.y, 0) / b.length;
+  let numerator = 0;
+  let sumSqA = 0;
+  let sumSqB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const diffA = a[i]!.y - meanA;
+    const diffB = b[i]!.y - meanB;
+    numerator += diffA * diffB;
+    sumSqA += diffA * diffA;
+    sumSqB += diffB * diffB;
+  }
+  const denominator = Math.sqrt(sumSqA * sumSqB);
+  if (!denominator) return null;
+  return numerator / denominator;
+}
+
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const graphViewRef = useRef<HTMLDivElement>(null);
@@ -56,6 +84,7 @@ function App() {
   const [distance, setDistance] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
+  const [trialHistory, setTrialHistory] = useState<TrialRecord[]>([]);
   const startTimeRef = useRef<number>(0);
   const samplesRef = useRef<Sample[]>([]);
   const lastDistanceRef = useRef<number | null>(null);
@@ -169,9 +198,10 @@ function App() {
     return () => cancelAnimationFrame(raf);
   }, [cameraOn, modelReady, ipdMm, focalScale, recording, target.duration]);
 
-  const startRecording = () => {
+  const resetActiveTrial = useCallback(() => {
     samplesRef.current = [];
     lastDistanceRef.current = null;
+    setRecording(false);
     setSamples([]);
     setRegion(null);
     setRegionLinear(null);
@@ -181,13 +211,22 @@ function App() {
     setTimeOffset(0);
     setDistOffset(0);
     setDistScale(1);
+  }, []);
+
+  const beginNewTrial = useCallback(() => {
+    resetActiveTrial();
     startTimeRef.current = performance.now();
     setRecording(true);
+  }, [resetActiveTrial]);
+
+  const startRecording = () => {
+    beginNewTrial();
   };
 
   const stopRecording = () => {
     setRecording(false);
     setSamples([...samplesRef.current]);
+    saveCurrentTrial(samplesRef.current.length ? [...samplesRef.current] : [...samples]);
   };
 
   const calibrate = () => {
@@ -239,6 +278,27 @@ function App() {
 
   const targetSeries = useMemo(() => sampleTarget(target, 300), [target]);
 
+  const alignedUserSeries = useMemo(() => {
+    if (!userSeries.length) return [];
+    return targetSeries.map((point) => {
+      const index = userSeries.findIndex((entry) => entry.t >= point.t);
+      if (index <= 0) return { t: point.t, y: userSeries[0]?.y ?? 0 };
+      if (index >= userSeries.length) return { t: point.t, y: userSeries[userSeries.length - 1]?.y ?? 0 };
+      const current = userSeries[index]!;
+      const previous = userSeries[index - 1]!;
+      const span = current.t - previous.t;
+      if (span <= 0) return { t: point.t, y: current.y };
+      const local = (point.t - previous.t) / span;
+      return { t: point.t, y: previous.y + (current.y - previous.y) * local };
+    });
+  }, [targetSeries, userSeries]);
+
+  const correlation = useMemo(() => pearsonCorrelation(targetSeries, alignedUserSeries), [alignedUserSeries, targetSeries]);
+  const matchScore = useMemo(() => {
+    if (correlation === null) return null;
+    return Math.max(1, Math.min(5, Math.round(((correlation + 1) / 2) * 4 + 1)));
+  }, [correlation]);
+
   const graphBounds = useMemo(() => {
     const values = [...targetSeries, ...userSeries].map((p) => p.y);
     if (!values.length) {
@@ -287,14 +347,40 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const newTarget = () => {
+  const saveCurrentTrial = useCallback((trialSamples?: Sample[]) => {
+    const completedSamples = trialSamples ?? (samplesRef.current.length ? [...samplesRef.current] : [...samples]);
+    if (completedSamples.length) {
+      setTrialHistory((prev) => [
+        ...prev,
+        {
+          id: prev.length + 1,
+          label: `trial_${prev.length + 1}`,
+          samples: completedSamples,
+          targetName: target.name,
+          mode,
+          difficulty,
+        },
+      ]);
+    }
+  }, [difficulty, mode, samples, target.name]);
+
+  const newTarget = useCallback(() => {
+    saveCurrentTrial();
+    resetActiveTrial();
     setTarget(generateTarget(mode, difficulty));
-    setRegion(null);
-    setRegionLinear(null);
-    setRegionQuad(null);
-    setGlobalLinear(null);
-    setGlobalQuad(null);
-  };
+  }, [difficulty, mode, resetActiveTrial, saveCurrentTrial]);
+
+  const switchTarget = useCallback(
+    (nextMode: MotionMode, nextDifficulty: Difficulty) => {
+      if (mode === nextMode && difficulty === nextDifficulty) return;
+      saveCurrentTrial();
+      resetActiveTrial();
+      setMode(nextMode);
+      setDifficulty(nextDifficulty);
+      setTarget(generateTarget(nextMode, nextDifficulty));
+    },
+    [difficulty, mode, resetActiveTrial, saveCurrentTrial],
+  );
 
   const renderCameraPanel = () => (
     <Card title="Camera">
@@ -376,7 +462,7 @@ function App() {
         <label className="block text-xs text-slate-400">Motion mode</label>
         <select
           value={mode}
-          onChange={(e) => setMode(e.target.value as MotionMode)}
+          onChange={(e) => switchTarget(e.target.value as MotionMode, difficulty)}
           className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
         >
           <option value="position">Position vs time</option>
@@ -386,7 +472,7 @@ function App() {
         <label className="mt-3 block text-xs text-slate-400">Difficulty</label>
         <select
           value={difficulty}
-          onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+          onChange={(e) => switchTarget(mode, e.target.value as Difficulty)}
           className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
         >
           <option value="easy">Easy</option>
@@ -525,6 +611,22 @@ function App() {
           />
         </div>
       </section>
+
+      <Card title="Match quality">
+        <div className="space-y-2 text-sm text-slate-300">
+          <p>
+            <span className="text-slate-400">Pearson r:</span>{" "}
+            {correlation === null ? "—" : correlation.toFixed(3)}
+          </p>
+          <p>
+            <span className="text-slate-400">Score:</span>{" "}
+            {matchScore === null ? "—" : `${matchScore}/5`}
+          </p>
+          <p className="text-xs text-slate-400">
+            Stored trials: <span className="font-mono">{trialHistory.length}</span>
+          </p>
+        </div>
+      </Card>
 
       <Card title="Current target">
         <div className="space-y-2 text-sm text-slate-300">
