@@ -239,13 +239,14 @@ function App() {
     if (!samples.length) return [];
     const pos = samples.map((s) => ({ t: s.t + timeOffset, y: s.d * distScale + distOffset }));
     if (mode === "position") return pos;
-    const smooth = (arr: SeriesPoint[]) => {
+
+    const smooth = (arr: SeriesPoint[], window = 9) => {
       const out: SeriesPoint[] = [];
-      const w = 3;
+      const half = Math.floor(window / 2);
       for (let i = 0; i < arr.length; i++) {
-        let sy = 0,
-          n = 0;
-        for (let k = -w; k <= w; k++) {
+        let sy = 0;
+        let n = 0;
+        for (let k = -half; k <= half; k++) {
           const j = i + k;
           if (j >= 0 && j < arr.length) {
             sy += arr[j]!.y;
@@ -256,24 +257,38 @@ function App() {
       }
       return out;
     };
-    const sm = smooth(pos);
-    const vel: SeriesPoint[] = [];
-    for (let i = 1; i < sm.length; i++) {
-      const a = sm[i - 1]!;
-      const b = sm[i]!;
-      const dt = b.t - a.t;
-      if (dt > 0) vel.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
+
+    const smoothWithDeadband = (arr: SeriesPoint[], deadband: number) => {
+      const smoothed = smooth(arr, 9);
+      return smoothed.map((point, index) => {
+        if (index === 0) return point;
+        const prev = smoothed[index - 1]!;
+        const delta = point.y - prev.y;
+        const dt = point.t - prev.t;
+        if (dt <= 0) return point;
+        const velocity = delta / dt;
+        const filtered = Math.abs(velocity) < deadband ? 0 : velocity;
+        return { ...point, y: filtered };
+      });
+    };
+
+    const sm = smooth(pos, 9);
+    if (mode === "velocity") {
+      return smoothWithDeadband(sm.map((point, index) => ({
+        t: point.t,
+        y: index === 0 ? 0 : point.y - sm[index - 1]!.y,
+      })), 0.008);
     }
-    if (mode === "velocity") return smooth(vel);
-    const smv = smooth(vel);
-    const acc: SeriesPoint[] = [];
-    for (let i = 1; i < smv.length; i++) {
-      const a = smv[i - 1]!;
-      const b = smv[i]!;
-      const dt = b.t - a.t;
-      if (dt > 0) acc.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
-    }
-    return smooth(acc);
+
+    const vel = smoothWithDeadband(sm.map((point, index) => ({
+      t: point.t,
+      y: index === 0 ? 0 : point.y - sm[index - 1]!.y,
+    })), 0.008);
+    const acc = smoothWithDeadband(vel.map((point, index) => ({
+      t: point.t,
+      y: index === 0 ? 0 : point.y - vel[index - 1]!.y,
+    })), 0.003);
+    return smooth(acc, 5);
   }, [samples, mode, timeOffset, distOffset, distScale]);
 
   const targetSeries = useMemo(() => sampleTarget(target, 300), [target]);
