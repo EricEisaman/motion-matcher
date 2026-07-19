@@ -296,6 +296,39 @@ function App() {
     setGlobalQuad(null);
   };
 
+  const renderCameraPanel = () => (
+    <Card title="Camera">
+      <div className="mx-auto flex max-w-[280px] justify-center overflow-hidden rounded-md bg-black">
+        <video
+          ref={videoRef}
+          className="aspect-video w-full max-w-[280px]"
+          playsInline
+          muted
+          style={{ transform: "scaleX(-1)" }}
+        />
+      </div>
+      <div className="mt-3 flex items-center justify-between text-sm">
+        <span className="text-slate-400">Distance</span>
+        <span className="font-mono text-sky-400">
+          {distance ? `${distance.toFixed(2)} m` : "—"}
+        </span>
+      </div>
+      {activeView === "instructions" && !cameraOn ? (
+        <Button onClick={startCamera} className="mt-3 w-full">
+          Start camera
+        </Button>
+      ) : (
+        <p className="mt-3 text-xs text-slate-500">
+          {cameraOn
+            ? modelReady
+              ? "Camera ready ✓"
+              : "Loading face model…"
+            : "Camera not active"}
+        </p>
+      )}
+    </Card>
+  );
+
   const renderInstructionsView = () => (
     <div className="space-y-4">
       <Card title="Instructions">
@@ -306,33 +339,6 @@ function App() {
           <li>Press <b>Start recording</b> and move to match the amber curve.</li>
           <li>Use region select + regression to analyze motion.</li>
         </ol>
-      </Card>
-
-      <Card title="Camera">
-        <div className="mx-auto flex max-w-[280px] justify-center overflow-hidden rounded-md bg-black">
-          <video
-            ref={videoRef}
-            className="aspect-video w-full max-w-[280px]"
-            playsInline
-            muted
-            style={{ transform: "scaleX(-1)" }}
-          />
-        </div>
-        <div className="mt-3 flex items-center justify-between text-sm">
-          <span className="text-slate-400">Distance</span>
-          <span className="font-mono text-sky-400">
-            {distance ? `${distance.toFixed(2)} m` : "—"}
-          </span>
-        </div>
-        {!cameraOn ? (
-          <Button onClick={startCamera} className="mt-3 w-full">
-            Start camera
-          </Button>
-        ) : (
-          <p className="mt-3 text-xs text-slate-500">
-            {modelReady ? "Model loaded ✓" : "Loading face model…"}
-          </p>
-        )}
       </Card>
 
       <Card title="Calibration">
@@ -596,6 +602,7 @@ function App() {
       </header>
 
       <main className="p-4">
+        <div className="mb-4">{renderCameraPanel()}</div>
         {activeView === "instructions" && renderInstructionsView()}
         {activeView === "settings" && renderSettingsView()}
         {activeView === "graph" && renderGraphView()}
