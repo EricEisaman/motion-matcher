@@ -58,6 +58,7 @@ function App() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const startTimeRef = useRef<number>(0);
   const samplesRef = useRef<Sample[]>([]);
+  const lastDistanceRef = useRef<number | null>(null);
 
   const [ipdMm, setIpdMm] = useState<number>(DEFAULT_IPD_MM);
   const [focalScale, setFocalScale] = useState<number>(1);
@@ -134,15 +135,24 @@ function App() {
             const ipd = ipdPxFromResult(res, video.videoWidth, video.videoHeight);
             if (ipd) {
               const d = distanceFromIpdPx(ipd, video.videoWidth, ipdMm, focalScale);
-              setDistance(d);
-              if (recording) {
+              if (Number.isFinite(d) && d > 0) {
+                lastDistanceRef.current = d;
+                setDistance(d);
+                if (recording) {
+                  const t = (performance.now() - startTimeRef.current) / 1000;
+                  if (t <= target.duration) {
+                    const s = { t, d };
+                    samplesRef.current.push(s);
+                    setSamples([...samplesRef.current]);
+                  } else {
+                    setRecording(false);
+                  }
+                }
+              } else if (lastDistanceRef.current !== null && recording) {
                 const t = (performance.now() - startTimeRef.current) / 1000;
                 if (t <= target.duration) {
-                  const s = { t, d };
-                  samplesRef.current.push(s);
-                  if (samplesRef.current.length % 2 === 0) {
-                    setSamples([...samplesRef.current]);
-                  }
+                  samplesRef.current.push({ t, d: lastDistanceRef.current });
+                  setSamples([...samplesRef.current]);
                 } else {
                   setRecording(false);
                 }
@@ -161,6 +171,7 @@ function App() {
 
   const startRecording = () => {
     samplesRef.current = [];
+    lastDistanceRef.current = null;
     setSamples([]);
     setRegion(null);
     setRegionLinear(null);
@@ -227,6 +238,18 @@ function App() {
   }, [samples, mode, timeOffset, distOffset, distScale]);
 
   const targetSeries = useMemo(() => sampleTarget(target, 300), [target]);
+
+  const graphBounds = useMemo(() => {
+    const values = [...targetSeries, ...userSeries].map((p) => p.y);
+    if (!values.length) {
+      return { yMin: target.yMin, yMax: target.yMax };
+    }
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(0.1, max - min);
+    const pad = span * 0.15;
+    return { yMin: min - pad, yMax: max + pad };
+  }, [targetSeries, userSeries, target.yMin, target.yMax]);
 
   const yLabel =
     target.mode === "position"
@@ -483,8 +506,8 @@ function App() {
             user={userSeries}
             xMin={0}
             xMax={target.duration}
-            yMin={target.yMin}
-            yMax={target.yMax}
+            yMin={graphBounds.yMin}
+            yMax={graphBounds.yMax}
             xLabel="time (s)"
             yLabel={yLabel}
             selectedRegion={region}

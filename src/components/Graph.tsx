@@ -146,7 +146,7 @@ export function Graph(props: GraphProps) {
     }
 
     // User trace
-    if (user.length > 1) {
+    if (user.length > 0) {
       ctx.strokeStyle = "#38bdf8";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -157,6 +157,13 @@ export function Graph(props: GraphProps) {
         else ctx.lineTo(x, y);
       });
       ctx.stroke();
+      if (user.length === 1) {
+        const p = user[0]!;
+        ctx.fillStyle = "#38bdf8";
+        ctx.beginPath();
+        ctx.arc(xToPx(p.t), yToPx(p.y), 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // Fits
