@@ -268,6 +268,23 @@ function App() {
     [distOffset, distScale, mode, timeOffset],
   );
 
+  const saveCurrentTrial = useCallback((trialSamples?: Sample[]) => {
+    const completedSamples = trialSamples ?? (samplesRef.current.length ? [...samplesRef.current] : [...samples]);
+    if (completedSamples.length) {
+      setTrialHistory((prev) => [
+        ...prev,
+        {
+          id: prev.length + 1,
+          label: `trial_${prev.length + 1}`,
+          samples: completedSamples,
+          targetName: target.name,
+          mode,
+          difficulty,
+        },
+      ]);
+    }
+  }, [difficulty, mode, samples, target.name]);
+
   const finalizeRecording = useCallback(
     (trialSamples?: Sample[]) => {
       const completedSamples = trialSamples ?? [...samplesRef.current];
@@ -317,9 +334,21 @@ function App() {
 
   const correlation = useMemo(() => pearsonCorrelation(targetSeries, alignedUserSeries), [alignedUserSeries, targetSeries]);
   const matchScore = useMemo(() => {
-    if (correlation === null) return null;
-    return Math.max(1, Math.min(5, Math.round(((correlation + 1) / 2) * 4 + 1)));
-  }, [correlation]);
+    if (!targetSeries.length || !alignedUserSeries.length) return null;
+    const diffs = targetSeries.map((point, index) => {
+      const userPoint = alignedUserSeries[index];
+      if (!userPoint) return null;
+      return Math.abs(point.y - userPoint.y);
+    });
+    const validDiffs = diffs.filter((value): value is number => value !== null);
+    if (!validDiffs.length) return null;
+    const meanDifference = validDiffs.reduce((sum, value) => sum + value, 0) / validDiffs.length;
+    const maxDifference = Math.max(...validDiffs);
+    if (!Number.isFinite(meanDifference) || !Number.isFinite(maxDifference) || maxDifference <= 0) return null;
+    const normalized = 1 - meanDifference / maxDifference;
+    const clamped = Math.max(0, Math.min(5, normalized * 5));
+    return Math.round(clamped * 100) / 100;
+  }, [alignedUserSeries, targetSeries]);
 
   const graphBounds = useMemo(() => {
     const values = [...targetSeries, ...userSeries].map((p) => p.y);
@@ -369,23 +398,6 @@ function App() {
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  const saveCurrentTrial = useCallback((trialSamples?: Sample[]) => {
-    const completedSamples = trialSamples ?? (samplesRef.current.length ? [...samplesRef.current] : [...samples]);
-    if (completedSamples.length) {
-      setTrialHistory((prev) => [
-        ...prev,
-        {
-          id: prev.length + 1,
-          label: `trial_${prev.length + 1}`,
-          samples: completedSamples,
-          targetName: target.name,
-          mode,
-          difficulty,
-        },
-      ]);
-    }
-  }, [difficulty, mode, samples, target.name]);
 
   const newTarget = useCallback(() => {
     saveCurrentTrial();
