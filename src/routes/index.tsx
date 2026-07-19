@@ -50,6 +50,7 @@ interface Sample {
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const graphViewRef = useRef<HTMLDivElement>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [distance, setDistance] = useState<number | null>(null);
@@ -75,8 +76,10 @@ function App() {
   const [regionQuad, setRegionQuad] = useState<QuadraticFit | null>(null);
   const [globalLinear, setGlobalLinear] = useState<LinearFit | null>(null);
   const [globalQuad, setGlobalQuad] = useState<QuadraticFit | null>(null);
+  const [activeView, setActiveView] = useState<"instructions" | "settings" | "graph">("instructions");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
-  // Start camera + model
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -96,7 +99,25 @@ function App() {
     }
   }, []);
 
-  // Inference loop
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsGraphFullscreen(Boolean(document.fullscreenElement));
+    };
+    handleFullscreenChange();
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleGraphFullscreen = useCallback(() => {
+    const el = graphViewRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void el.requestFullscreen();
+    }
+  }, []);
+
   useEffect(() => {
     if (!cameraOn || !modelReady) return;
     let raf = 0;
@@ -119,7 +140,6 @@ function App() {
                 if (t <= target.duration) {
                   const s = { t, d };
                   samplesRef.current.push(s);
-                  // Throttle React updates to ~30 fps
                   if (samplesRef.current.length % 2 === 0) {
                     setSamples([...samplesRef.current]);
                   }
@@ -162,22 +182,19 @@ function App() {
   const calibrate = () => {
     const known = parseFloat(calibKnown);
     if (!known || !distance) return;
-    // distance = focalScale * f0 * ipd_m / ipd_px  → adjust focalScale
-    // known/current = new/old scale
     setFocalScale((s) => s * (known / distance));
   };
 
-  // Convert raw samples → displayed points depending on mode + shifts
   const userSeries: SeriesPoint[] = useMemo(() => {
     if (!samples.length) return [];
     const pos = samples.map((s) => ({ t: s.t + timeOffset, y: s.d * distScale + distOffset }));
     if (mode === "position") return pos;
-    // Numeric derivative for velocity/acceleration
     const smooth = (arr: SeriesPoint[]) => {
       const out: SeriesPoint[] = [];
       const w = 3;
       for (let i = 0; i < arr.length; i++) {
-        let sy = 0, n = 0;
+        let sy = 0,
+          n = 0;
         for (let k = -w; k <= w; k++) {
           const j = i + k;
           if (j >= 0 && j < arr.length) {
@@ -256,236 +273,319 @@ function App() {
     setGlobalQuad(null);
   };
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">Movement Matcher</h1>
-        <p className="text-xs text-slate-400">
-          Move toward and away from your webcam to match the target graph. All processing runs
-          locally in your browser.
-        </p>
-      </header>
+  const renderInstructionsView = () => (
+    <div className="space-y-4">
+      <Card title="Instructions">
+        <ol className="list-decimal space-y-1 pl-4 text-xs text-slate-400">
+          <li>Allow webcam access.</li>
+          <li>Stand ~1 m from the camera and calibrate.</li>
+          <li>Pick a target graph and difficulty.</li>
+          <li>Press <b>Start recording</b> and move to match the amber curve.</li>
+          <li>Use region select + regression to analyze motion.</li>
+        </ol>
+      </Card>
 
-      <main className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[320px_1fr_320px]">
-        {/* Left: camera + controls */}
-        <section className="space-y-4">
-          <Card title="Camera">
-            <div className="overflow-hidden rounded-md bg-black">
-              <video
-                ref={videoRef}
-                className="w-full"
-                playsInline
-                muted
-                style={{ transform: "scaleX(-1)" }}
-              />
-            </div>
-            <div className="mt-3 flex items-center justify-between text-sm">
-              <span className="text-slate-400">Distance</span>
-              <span className="font-mono text-sky-400">
-                {distance ? `${distance.toFixed(2)} m` : "—"}
-              </span>
-            </div>
+      <Card title="Camera">
+        <div className="overflow-hidden rounded-md bg-black">
+          <video
+            ref={videoRef}
+            className="w-full"
+            playsInline
+            muted
+            style={{ transform: "scaleX(-1)" }}
+          />
+        </div>
+        <div className="mt-3 flex items-center justify-between text-sm">
+          <span className="text-slate-400">Distance</span>
+          <span className="font-mono text-sky-400">
+            {distance ? `${distance.toFixed(2)} m` : "—"}
+          </span>
+        </div>
+        {!cameraOn ? (
+          <Button onClick={startCamera} className="mt-3 w-full">
+            Start camera
+          </Button>
+        ) : (
+          <p className="mt-3 text-xs text-slate-500">
+            {modelReady ? "Model loaded ✓" : "Loading face model…"}
+          </p>
+        )}
+      </Card>
+
+      <Card title="Calibration">
+        <label className="block text-xs text-slate-400">Interpupillary distance (mm)</label>
+        <input
+          type="number"
+          value={ipdMm}
+          onChange={(e) => setIpdMm(parseFloat(e.target.value) || DEFAULT_IPD_MM)}
+          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+        />
+        <label className="mt-3 block text-xs text-slate-400">
+          Stand at known distance (m), then refine:
+        </label>
+        <div className="mt-1 flex gap-2">
+          <input
+            type="number"
+            step="0.05"
+            value={calibKnown}
+            onChange={(e) => setCalibKnown(e.target.value)}
+            className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+          />
+          <Button onClick={calibrate} variant="secondary">
+            Set
+          </Button>
+        </div>
+        <p className="mt-2 text-[11px] text-slate-500">Focal scale: {focalScale.toFixed(3)}</p>
+      </Card>
+
+      <Card title="Recording">
+        {!recording ? (
+          <Button onClick={startRecording} disabled={!cameraOn} className="w-full">
+            Start recording
+          </Button>
+        ) : (
+          <Button onClick={stopRecording} variant="danger" className="w-full">
+            Stop recording
+          </Button>
+        )}
+        <p className="mt-2 text-xs text-slate-400">
+          Samples: <span className="font-mono">{samplesRef.current.length}</span>
+        </p>
+        <Button
+          onClick={downloadCsv}
+          variant="secondary"
+          className="mt-3 w-full"
+          disabled={!samples.length}
+        >
+          Download CSV
+        </Button>
+      </Card>
+    </div>
+  );
+
+  const renderSettingsView = () => (
+    <div className="space-y-4">
+      <Card title="Target graph">
+        <label className="block text-xs text-slate-400">Motion mode</label>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as MotionMode)}
+          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+        >
+          <option value="position">Position vs time</option>
+          <option value="velocity">Velocity vs time</option>
+          <option value="acceleration">Acceleration vs time</option>
+        </select>
+        <label className="mt-3 block text-xs text-slate-400">Difficulty</label>
+        <select
+          value={difficulty}
+          onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+        >
+          <option value="easy">Easy</option>
+          <option value="medium">Medium</option>
+          <option value="hard">Hard</option>
+        </select>
+        <Button onClick={newTarget} className="mt-3 w-full">
+          Generate new target
+        </Button>
+      </Card>
+
+      <Card title="Align trace">
+        <Slider
+          label="Time offset (s)"
+          value={timeOffset}
+          min={-5}
+          max={5}
+          step={0.05}
+          onChange={setTimeOffset}
+        />
+        <Slider
+          label="Distance offset (m)"
+          value={distOffset}
+          min={-2}
+          max={2}
+          step={0.01}
+          onChange={setDistOffset}
+        />
+        <Slider
+          label="Distance scale"
+          value={distScale}
+          min={0.5}
+          max={2}
+          step={0.01}
+          onChange={setDistScale}
+        />
+      </Card>
+
+      <Card title="Regression">
+        <p className="text-xs text-slate-400">
+          Shift-drag (or right-drag) the graph to select a region.
+        </p>
+        {region && (
+          <p className="mt-1 font-mono text-[11px] text-slate-500">
+            region: [{region.t0.toFixed(2)}, {region.t1.toFixed(2)}] s · {regionPoints.length} pts
+          </p>
+        )}
+        <div className="mt-2 flex gap-2">
+          <Button onClick={fitRegion} disabled={!region || regionPoints.length < 3} variant="secondary">
+            Fit region
+          </Button>
+          <Button onClick={fitAll} disabled={userSeries.length < 3} variant="secondary">
+            Fit all data
+          </Button>
+        </div>
+        <div className="mt-3 space-y-2 text-xs">
+          {regionLinear && (
+            <FitRow color="#a3e635" title="Region linear" fit={regionLinear.formula} r2={regionLinear.r2} />
+          )}
+          {regionQuad && (
+            <FitRow color="#f472b6" title="Region quadratic" fit={regionQuad.formula} r2={regionQuad.r2} />
+          )}
+          {globalLinear && (
+            <FitRow color="#22d3ee" title="Global linear" fit={globalLinear.formula} r2={globalLinear.r2} />
+          )}
+          {globalQuad && (
+            <FitRow color="#c084fc" title="Global quadratic" fit={globalQuad.formula} r2={globalQuad.r2} />
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+
+  const renderGraphView = () => (
+    <div className="space-y-4">
+      <section ref={graphViewRef} className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+          <div>
+            <span className="text-slate-400">Target: </span>
+            <span className="font-medium">{target.name}</span>
+            <span className="ml-2 rounded bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-slate-400">
+              {target.mode} · {target.difficulty}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {!cameraOn ? (
-              <Button onClick={startCamera} className="mt-3 w-full">
+              <Button onClick={startCamera} variant="secondary">
                 Start camera
               </Button>
             ) : (
-              <p className="mt-3 text-xs text-slate-500">
-                {modelReady ? "Model loaded ✓" : "Loading face model…"}
+              <p className="text-xs text-slate-500">
+                {modelReady ? "Camera ready ✓" : "Loading face model…"}
               </p>
             )}
-          </Card>
-
-          <Card title="Calibration">
-            <label className="block text-xs text-slate-400">Interpupillary distance (mm)</label>
-            <input
-              type="number"
-              value={ipdMm}
-              onChange={(e) => setIpdMm(parseFloat(e.target.value) || DEFAULT_IPD_MM)}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-            />
-            <label className="mt-3 block text-xs text-slate-400">
-              Stand at known distance (m), then refine:
-            </label>
-            <div className="mt-1 flex gap-2">
-              <input
-                type="number"
-                step="0.05"
-                value={calibKnown}
-                onChange={(e) => setCalibKnown(e.target.value)}
-                className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-              />
-              <Button onClick={calibrate} variant="secondary">
-                Set
-              </Button>
-            </div>
-            <p className="mt-2 text-[11px] text-slate-500">
-              Focal scale: {focalScale.toFixed(3)}
-            </p>
-          </Card>
-
-          <Card title="Recording">
-            {!recording ? (
-              <Button onClick={startRecording} disabled={!cameraOn} className="w-full">
-                Start recording
-              </Button>
-            ) : (
-              <Button onClick={stopRecording} variant="danger" className="w-full">
-                Stop recording
-              </Button>
-            )}
-            <p className="mt-2 text-xs text-slate-400">
-              Samples: <span className="font-mono">{samplesRef.current.length}</span>
-            </p>
-            <Button
-              onClick={downloadCsv}
-              variant="secondary"
-              className="mt-3 w-full"
-              disabled={!samples.length}
-            >
-              Download CSV
+            <Button onClick={toggleGraphFullscreen} variant="secondary">
+              {isGraphFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </Button>
-          </Card>
-
-          <Card title="How to use">
-            <ol className="list-decimal space-y-1 pl-4 text-xs text-slate-400">
-              <li>Allow webcam access.</li>
-              <li>Stand ~1 m from the camera and calibrate.</li>
-              <li>Pick a target graph and difficulty.</li>
-              <li>Press <b>Start recording</b> and move to match the amber curve.</li>
-              <li>Use region select + regression to analyze motion.</li>
-            </ol>
-          </Card>
-        </section>
-
-        {/* Center: graph */}
-        <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <div>
-              <span className="text-slate-400">Target: </span>
-              <span className="font-medium">{target.name}</span>
-              <span className="ml-2 rounded bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-slate-400">
-                {target.mode} · {target.difficulty}
-              </span>
-            </div>
-            <div className="flex gap-4 text-xs">
-              <Legend color="#f59e0b" label="target" />
-              <Legend color="#38bdf8" label="you" />
-              {regionLinear && <Legend color="#a3e635" label="region linear" />}
-              {regionQuad && <Legend color="#f472b6" label="region quad" />}
-              {globalLinear && <Legend color="#22d3ee" label="global linear" />}
-              {globalQuad && <Legend color="#c084fc" label="global quad" />}
-            </div>
           </div>
-          <div className="h-[540px]">
-            <Graph
-              target={targetSeries}
-              user={userSeries}
-              xMin={0}
-              xMax={target.duration}
-              yMin={target.yMin}
-              yMax={target.yMax}
-              xLabel="time (s)"
-              yLabel={yLabel}
-              selectedRegion={region}
-              onSelectRegion={setRegion}
-              linearFit={regionLinear}
-              quadraticFit={regionQuad}
-              globalLinearFit={globalLinear}
-              globalQuadraticFit={globalQuad}
-            />
-          </div>
-        </section>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-4 text-xs">
+          <Legend color="#f59e0b" label="target" />
+          <Legend color="#38bdf8" label="you" />
+          {regionLinear && <Legend color="#a3e635" label="region linear" />}
+          {regionQuad && <Legend color="#f472b6" label="region quad" />}
+          {globalLinear && <Legend color="#22d3ee" label="global linear" />}
+          {globalQuad && <Legend color="#c084fc" label="global quad" />}
+        </div>
+        <div className="h-[70vh] min-h-[540px]">
+          <Graph
+            target={targetSeries}
+            user={userSeries}
+            xMin={0}
+            xMax={target.duration}
+            yMin={target.yMin}
+            yMax={target.yMax}
+            xLabel="time (s)"
+            yLabel={yLabel}
+            selectedRegion={region}
+            onSelectRegion={setRegion}
+            linearFit={regionLinear}
+            quadraticFit={regionQuad}
+            globalLinearFit={globalLinear}
+            globalQuadraticFit={globalQuad}
+          />
+        </div>
+      </section>
 
-        {/* Right: target + analysis */}
-        <section className="space-y-4">
-          <Card title="Target graph">
-            <label className="block text-xs text-slate-400">Motion mode</label>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as MotionMode)}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-            >
-              <option value="position">Position vs time</option>
-              <option value="velocity">Velocity vs time</option>
-              <option value="acceleration">Acceleration vs time</option>
-            </select>
-            <label className="mt-3 block text-xs text-slate-400">Difficulty</label>
-            <select
-              value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-            >
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-            <Button onClick={newTarget} className="mt-3 w-full">
-              Generate new target
-            </Button>
-          </Card>
+      <Card title="Current target">
+        <div className="space-y-2 text-sm text-slate-300">
+          <p>
+            <span className="text-slate-400">Name:</span> {target.name}
+          </p>
+          <p>
+            <span className="text-slate-400">Mode:</span> {target.mode}
+          </p>
+          <p>
+            <span className="text-slate-400">Difficulty:</span> {target.difficulty}
+          </p>
+        </div>
+      </Card>
+    </div>
+  );
 
-          <Card title="Align trace">
-            <Slider
-              label="Time offset (s)"
-              value={timeOffset}
-              min={-5}
-              max={5}
-              step={0.05}
-              onChange={setTimeOffset}
-            />
-            <Slider
-              label="Distance offset (m)"
-              value={distOffset}
-              min={-2}
-              max={2}
-              step={0.01}
-              onChange={setDistOffset}
-            />
-            <Slider
-              label="Distance scale"
-              value={distScale}
-              min={0.5}
-              max={2}
-              step={0.01}
-              onChange={setDistScale}
-            />
-          </Card>
-
-          <Card title="Regression">
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-6 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Movement Matcher</h1>
             <p className="text-xs text-slate-400">
-              Shift-drag (or right-drag) the graph to select a region.
+              Move toward and away from your webcam to match the target graph. All processing runs
+              locally in your browser.
             </p>
-            {region && (
-              <p className="mt-1 font-mono text-[11px] text-slate-500">
-                region: [{region.t0.toFixed(2)}, {region.t1.toFixed(2)}] s · {regionPoints.length}{" "}
-                pts
-              </p>
+          </div>
+          <div className="relative">
+            <button
+              aria-label="Open view menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((prev) => !prev)}
+              className="rounded-md border border-slate-700 bg-slate-900/80 p-2 text-slate-200"
+            >
+              <div className="flex flex-col gap-1">
+                <span className="block h-0.5 w-5 bg-current" />
+                <span className="block h-0.5 w-5 bg-current" />
+                <span className="block h-0.5 w-5 bg-current" />
+              </div>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 z-20 mt-2 min-w-[260px] rounded-lg border border-slate-700 bg-slate-900/95 p-2 shadow-xl">
+                <button
+                  onClick={() => {
+                    setActiveView("instructions");
+                    setMenuOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "instructions" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
+                >
+                  <span>Instructions and Camera setup 📸</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveView("settings");
+                    setMenuOpen(false);
+                  }}
+                  className={`mt-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "settings" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
+                >
+                  <span>Target Graph Settings and Tools 🎯</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveView("graph");
+                    setMenuOpen(false);
+                  }}
+                  className={`mt-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${activeView === "graph" ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800/70"}`}
+                >
+                  <span>Focused Graph 📈</span>
+                </button>
+              </div>
             )}
-            <div className="mt-2 flex gap-2">
-              <Button onClick={fitRegion} disabled={!region || regionPoints.length < 3} variant="secondary">
-                Fit region
-              </Button>
-              <Button onClick={fitAll} disabled={userSeries.length < 3} variant="secondary">
-                Fit all data
-              </Button>
-            </div>
-            <div className="mt-3 space-y-2 text-xs">
-              {regionLinear && (
-                <FitRow color="#a3e635" title="Region linear" fit={regionLinear.formula} r2={regionLinear.r2} />
-              )}
-              {regionQuad && (
-                <FitRow color="#f472b6" title="Region quadratic" fit={regionQuad.formula} r2={regionQuad.r2} />
-              )}
-              {globalLinear && (
-                <FitRow color="#22d3ee" title="Global linear" fit={globalLinear.formula} r2={globalLinear.r2} />
-              )}
-              {globalQuad && (
-                <FitRow color="#c084fc" title="Global quadratic" fit={globalQuad.formula} r2={globalQuad.r2} />
-              )}
-            </div>
-          </Card>
-        </section>
+          </div>
+        </div>
+      </header>
+
+      <main className="p-4">
+        {activeView === "instructions" && renderInstructionsView()}
+        {activeView === "settings" && renderSettingsView()}
+        {activeView === "graph" && renderGraphView()}
       </main>
     </div>
   );
