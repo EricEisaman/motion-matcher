@@ -24,13 +24,13 @@ import { Graph, type SeriesPoint } from "@/components/Graph";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Kinematics Graph Matcher" },
+      { title: "Movement Matcher" },
       {
         name: "description",
         content:
           "Match kinematics graphs by moving toward and away from your webcam. In-browser face tracking, live overlays, and regression tools.",
       },
-      { property: "og:title", content: "Kinematics Graph Matcher" },
+      { property: "og:title", content: "Movement Matcher" },
       {
         property: "og:description",
         content:
@@ -259,7 +259,7 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">Kinematics Graph Matcher</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Movement Matcher</h1>
         <p className="text-xs text-slate-400">
           Move toward and away from your webcam to match the target graph. All processing runs
           locally in your browser.
