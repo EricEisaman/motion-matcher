@@ -175,6 +175,7 @@ function App() {
                     setSamples([...samplesRef.current]);
                   } else {
                     setRecording(false);
+                    finalizeRecording(samplesRef.current);
                   }
                 }
               } else if (lastDistanceRef.current !== null && recording) {
@@ -184,6 +185,7 @@ function App() {
                   setSamples([...samplesRef.current]);
                 } else {
                   setRecording(false);
+                  finalizeRecording(samplesRef.current);
                 }
               }
             }
@@ -223,10 +225,66 @@ function App() {
     beginNewTrial();
   };
 
+  const buildUserSeriesForSamples = useCallback(
+    (inputSamples: Sample[]) => {
+      const pos = inputSamples.map((s) => ({ t: s.t + timeOffset, y: s.d * distScale + distOffset }));
+      if (mode === "position") return pos;
+      const smooth = (arr: SeriesPoint[]) => {
+        const out: SeriesPoint[] = [];
+        const w = 3;
+        for (let i = 0; i < arr.length; i++) {
+          let sy = 0,
+            n = 0;
+          for (let k = -w; k <= w; k++) {
+            const j = i + k;
+            if (j >= 0 && j < arr.length) {
+              sy += arr[j]!.y;
+              n++;
+            }
+          }
+          out.push({ t: arr[i]!.t, y: sy / n });
+        }
+        return out;
+      };
+      const sm = smooth(pos);
+      const vel: SeriesPoint[] = [];
+      for (let i = 1; i < sm.length; i++) {
+        const a = sm[i - 1]!;
+        const b = sm[i]!;
+        const dt = b.t - a.t;
+        if (dt > 0) vel.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
+      }
+      if (mode === "velocity") return smooth(vel);
+      const smv = smooth(vel);
+      const acc: SeriesPoint[] = [];
+      for (let i = 1; i < smv.length; i++) {
+        const a = smv[i - 1]!;
+        const b = smv[i]!;
+        const dt = b.t - a.t;
+        if (dt > 0) acc.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
+      }
+      return smooth(acc);
+    },
+    [distOffset, distScale, mode, timeOffset],
+  );
+
+  const finalizeRecording = useCallback(
+    (trialSamples?: Sample[]) => {
+      const completedSamples = trialSamples ?? [...samplesRef.current];
+      if (completedSamples.length) {
+        setSamples([...completedSamples]);
+        const series = buildUserSeriesForSamples(completedSamples);
+        setGlobalLinear(linearRegression(series));
+        setGlobalQuad(quadraticRegression(series));
+      }
+      saveCurrentTrial(completedSamples);
+    },
+    [buildUserSeriesForSamples, saveCurrentTrial],
+  );
+
   const stopRecording = () => {
     setRecording(false);
-    setSamples([...samplesRef.current]);
-    saveCurrentTrial(samplesRef.current.length ? [...samplesRef.current] : [...samples]);
+    finalizeRecording(samplesRef.current);
   };
 
   const calibrate = () => {
@@ -237,44 +295,8 @@ function App() {
 
   const userSeries: SeriesPoint[] = useMemo(() => {
     if (!samples.length) return [];
-    const pos = samples.map((s) => ({ t: s.t + timeOffset, y: s.d * distScale + distOffset }));
-    if (mode === "position") return pos;
-    const smooth = (arr: SeriesPoint[]) => {
-      const out: SeriesPoint[] = [];
-      const w = 3;
-      for (let i = 0; i < arr.length; i++) {
-        let sy = 0,
-          n = 0;
-        for (let k = -w; k <= w; k++) {
-          const j = i + k;
-          if (j >= 0 && j < arr.length) {
-            sy += arr[j]!.y;
-            n++;
-          }
-        }
-        out.push({ t: arr[i]!.t, y: sy / n });
-      }
-      return out;
-    };
-    const sm = smooth(pos);
-    const vel: SeriesPoint[] = [];
-    for (let i = 1; i < sm.length; i++) {
-      const a = sm[i - 1]!;
-      const b = sm[i]!;
-      const dt = b.t - a.t;
-      if (dt > 0) vel.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
-    }
-    if (mode === "velocity") return smooth(vel);
-    const smv = smooth(vel);
-    const acc: SeriesPoint[] = [];
-    for (let i = 1; i < smv.length; i++) {
-      const a = smv[i - 1]!;
-      const b = smv[i]!;
-      const dt = b.t - a.t;
-      if (dt > 0) acc.push({ t: (a.t + b.t) / 2, y: (b.y - a.y) / dt });
-    }
-    return smooth(acc);
-  }, [samples, mode, timeOffset, distOffset, distScale]);
+    return buildUserSeriesForSamples(samples);
+  }, [buildUserSeriesForSamples, samples]);
 
   const targetSeries = useMemo(() => sampleTarget(target, 300), [target]);
 
@@ -329,8 +351,9 @@ function App() {
   };
 
   const fitAll = () => {
-    setGlobalLinear(linearRegression(userSeries));
-    setGlobalQuad(quadraticRegression(userSeries));
+    const series = buildUserSeriesForSamples(samplesRef.current.length ? samplesRef.current : samples);
+    setGlobalLinear(linearRegression(series));
+    setGlobalQuad(quadraticRegression(series));
   };
 
   const downloadCsv = () => {
