@@ -35,19 +35,24 @@ async function loadCv(): Promise<any> {
   if (cvLib) return cvLib;
   if (cvLoading) return cvLoading;
 
+  console.debug("target tracker: loading OpenCV");
+
   cvLoading = new Promise((resolve, reject) => {
     const w = window as any;
     const fail = (message: string, err?: unknown) => {
+      console.error("target tracker: OpenCV load failed", { message, err });
       cvLoading = null;
       reject(err instanceof Error ? err : new Error(message));
     };
     const done = (cv: any) => {
+      console.debug("target tracker: OpenCV ready", { mat: !!cv?.Mat, keys: Object.keys(cv || {}).slice(0, 10) });
       cvLib = cv;
       cvLoading = null;
       resolve(cvLib);
     };
 
     if (w.cv && w.cv.Mat) {
+      console.debug("target tracker: OpenCV already available on window");
       return done(w.cv);
     }
 
@@ -60,10 +65,12 @@ async function loadCv(): Promise<any> {
         done(cv);
         return;
       }
+      console.debug("target tracker: waiting for onRuntimeInitialized");
       cv["onRuntimeInitialized"] = () => done(cv);
     };
 
     const useCdnFallback = () => {
+      console.debug("target tracker: falling back to CDN OpenCV script");
       const s = document.createElement("script");
       s.src = "https://docs.opencv.org/4.9.0/opencv.js";
       s.async = true;
@@ -81,17 +88,19 @@ async function loadCv(): Promise<any> {
       document.head.appendChild(s);
     };
 
-    // Try the npm package first; OpenCV does not expose a stable ESM type surface.
     import("@techstark/opencv-js")
       .then(async (m: any) => {
         try {
           const cv = await (m.default || m);
+          console.debug("target tracker: npm OpenCV module resolved", { hasMat: !!cv?.Mat });
           finishWithCv(cv);
         } catch (err) {
+          console.warn("target tracker: npm OpenCV import failed, retrying via CDN", err);
           useCdnFallback();
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn("target tracker: npm OpenCV import not available, retrying via CDN", err);
         useCdnFallback();
       });
   });

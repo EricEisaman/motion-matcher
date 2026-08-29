@@ -10,11 +10,15 @@ export async function getFaceLandmarker(): Promise<FaceLandmarker> {
   if (landmarker) return landmarker;
   if (loading) return loading;
 
+  console.debug("face tracker: starting loader");
+
   loading = (async () => {
     try {
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm",
       );
+      console.debug("face tracker: vision resolver ready");
+
       const fl = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
@@ -27,8 +31,10 @@ export async function getFaceLandmarker(): Promise<FaceLandmarker> {
         outputFacialTransformationMatrixes: false,
       });
       landmarker = fl;
+      console.debug("face tracker: loaded");
       return fl;
     } catch (err) {
+      console.error("face tracker: failed to load", err);
       loading = null;
       throw err;
     }

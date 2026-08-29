@@ -259,18 +259,36 @@ function App() {
   ]);
 
   const setUploadedTarget = async (file: File) => {
+    console.debug("upload target: start", {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    });
+
     try {
       setTargetError(null);
       setTargetSet(false);
       setTargetDetected(false);
+      setDistance(null);
+      lastDistanceRef.current = null;
+
       const image = await createImageBitmap(file);
+      console.debug("upload target: image bitmap created", {
+        width: image.width,
+        height: image.height,
+      });
+
       await getTargetTracker();
+      console.debug("upload target: tracker ready");
       await setTargetFromElement(image);
       image.close();
       setTargetSet(true);
+      console.debug("upload target: success");
     } catch (e) {
+      const err = e as Error;
+      console.error("upload target: failed", err);
       setTargetSet(false);
-      setTargetError(`Could not load target: ${(e as Error).message}`);
+      setTargetError(`Could not load target: ${err.message}`);
     }
   };
 
