@@ -377,6 +377,10 @@ function App() {
       setTargetSet(false);
       setTargetDetected(false);
 
+      if (trackingMode !== "target") {
+        await changeTrackingMode("target");
+      }
+
       const roi = {
         x: selection.left,
         y: selection.top,
