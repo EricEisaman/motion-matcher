@@ -34,42 +34,80 @@ let cvLoading: Promise<any> | null = null;
 async function loadCv(): Promise<any> {
   if (cvLib) return cvLib;
   if (cvLoading) return cvLoading;
+
   cvLoading = new Promise((resolve, reject) => {
     const w = window as any;
+    const fail = (message: string, err?: unknown) => {
+      cvLoading = null;
+      reject(err instanceof Error ? err : new Error(message));
+    };
+    const done = (cv: any) => {
+      cvLib = cv;
+      cvLoading = null;
+      resolve(cvLib);
+    };
+
     if (w.cv && w.cv.Mat) {
-      cvLib = w.cv;
-      return resolve(cvLib);
+      return done(w.cv);
     }
+
+    const timer = window.setTimeout(() => {
+      fail("OpenCV failed to initialize in time. Please reload or try again.");
+    }, 20000);
+
+    const finishWithCv = (cv: any) => {
+      if (!cv || !cv.Mat) {
+        cv["onRuntimeInitialized"] = () => done(cv);
+        return;
+      }
+      done(cv);
+    };
+
+    const useCdnFallback = () => {
+      const s = document.createElement("script");
+      s.src = "https://docs.opencv.org/4.9.0/opencv.js";
+      s.async = true;
+      s.onload = () => {
+        const cv = (window as any).cv;
+        if (!cv) {
+          fail("OpenCV script loaded without a window.cv object.");
+          return;
+        }
+        if (cv.Mat) {
+          done(cv);
+          return;
+        }
+        cv["onRuntimeInitialized"] = () => done(cv);
+      };
+      s.onerror = () => {
+        window.clearTimeout(timer);
+        fail("Could not load OpenCV for target tracking.");
+      };
+      document.head.appendChild(s);
+    };
+
     // Try the npm package first; OpenCV does not expose a stable ESM type surface.
     import("@techstark/opencv-js")
       .then(async (m: any) => {
-        const cv = await (m.default || m);
-        if (cv.Mat) {
-          cvLib = cv;
-          resolve(cvLib);
-        } else {
-          cv["onRuntimeInitialized"] = () => {
-            cvLib = cv;
-            resolve(cvLib);
-          };
+        try {
+          const cv = await (m.default || m);
+          finishWithCv(cv);
+        } catch (err) {
+          window.clearTimeout(timer);
+          useCdnFallback();
         }
       })
       .catch(() => {
-        // CDN fallback
-        const s = document.createElement("script");
-        s.src = "https://docs.opencv.org/4.9.0/opencv.js";
-        s.async = true;
-        s.onload = () => {
-          const cv = (window as any).cv;
-          cv["onRuntimeInitialized"] = () => {
-            cvLib = cv;
-            resolve(cvLib);
-          };
-        };
-        s.onerror = reject;
-        document.head.appendChild(s);
+        window.clearTimeout(timer);
+        useCdnFallback();
       });
+
+    // Guard against a stuck runtime init; the timeout will reject and allow retry.
+    const finalize = () => window.clearTimeout(timer);
+    (window as any).__opencvLoadFinalize = finalize;
+    return () => finalize();
   });
+
   return cvLoading;
 }
 
@@ -372,12 +410,19 @@ let loading: Promise<ImageTargetTrackerImpl> | null = null;
 export async function getTargetTracker(): Promise<ImageTargetTrackerImpl> {
   if (tracker) return tracker;
   if (loading) return loading;
+
   loading = (async () => {
-    const cv = await loadCv();
-    const t = new ImageTargetTrackerImpl(cv);
-    tracker = t;
-    return t;
+    try {
+      const cv = await loadCv();
+      const t = new ImageTargetTrackerImpl(cv);
+      tracker = t;
+      return t;
+    } catch (error) {
+      loading = null;
+      throw error;
+    }
   })();
+
   return loading;
 }
 

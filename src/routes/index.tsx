@@ -261,7 +261,10 @@ function App() {
   const setUploadedTarget = async (file: File) => {
     try {
       setTargetError(null);
+      setTargetSet(false);
+      setTargetDetected(false);
       const image = await createImageBitmap(file);
+      await getTargetTracker();
       await setTargetFromElement(image);
       image.close();
       setTargetSet(true);
@@ -278,15 +281,25 @@ function App() {
     height: number;
   }) => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2) return;
+    if (!video || video.readyState < 2 || !cameraOn) {
+      setCropSelection(null);
+      setTargetError("Camera is not ready to select a target region.");
+      return;
+    }
+
     try {
       setTargetError(null);
+      setTargetSet(false);
+      setTargetDetected(false);
+
       const roi = {
         x: 1 - selection.left - selection.width,
         y: selection.top,
         w: selection.width,
         h: selection.height,
       };
+
+      await getTargetTracker();
       await setTargetFromVideoCrop(video, roi);
       setTargetSet(true);
       const initialWidthPx = selection.width * video.videoWidth;
@@ -301,6 +314,7 @@ function App() {
         setDistance(initialDistance);
       }
     } catch (e) {
+      setTargetSet(false);
       setTargetError(`Could not crop target: ${(e as Error).message}`);
     }
   };
