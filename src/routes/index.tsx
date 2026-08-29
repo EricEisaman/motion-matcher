@@ -205,7 +205,8 @@ function App() {
               setTargetDetected(Boolean(widthPx));
               if (widthPx) {
                 const rawDistance = distanceFromIpdPx(widthPx, video.videoWidth, ipdMm, focalScale);
-                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 100) {
+                console.debug("face loop: width / distance", { widthPx, rawDistance, ipdMm, focalScale });
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 1000) {
                   const prev = distanceFilterRef.current ?? rawDistance;
                   const smoothed = prev * 0.7 + rawDistance * 0.3;
                   distanceFilterRef.current = smoothed;
@@ -249,7 +250,8 @@ function App() {
               setTargetDetected(Boolean(widthPx));
               if (widthPx) {
                 const rawDistance = distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale);
-                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 100) {
+                console.debug("target loop: width / distance", { widthPx, rawDistance, ipdMm, focalScale });
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 1000) {
                   const prev = distanceFilterRef.current ?? rawDistance;
                   const smoothed = prev * 0.7 + rawDistance * 0.3;
                   distanceFilterRef.current = smoothed;
@@ -311,6 +313,10 @@ function App() {
       setTargetDetected(false);
       setDistance(null);
       lastDistanceRef.current = null;
+
+      if (trackingMode !== "target") {
+        await changeTrackingMode("target");
+      }
 
       const image = await createImageBitmap(file);
       console.debug("upload target: image bitmap created", {
