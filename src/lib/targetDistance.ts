@@ -51,16 +51,16 @@ async function loadCv(): Promise<any> {
       return done(w.cv);
     }
 
-    const timer = window.setTimeout(() => {
-      fail("OpenCV failed to initialize in time. Please reload or try again.");
-    }, 20000);
-
     const finishWithCv = (cv: any) => {
-      if (!cv || !cv.Mat) {
-        cv["onRuntimeInitialized"] = () => done(cv);
+      if (!cv) {
+        fail("OpenCV runtime did not initialize.");
         return;
       }
-      done(cv);
+      if (cv.Mat) {
+        done(cv);
+        return;
+      }
+      cv["onRuntimeInitialized"] = () => done(cv);
     };
 
     const useCdnFallback = () => {
@@ -73,14 +73,9 @@ async function loadCv(): Promise<any> {
           fail("OpenCV script loaded without a window.cv object.");
           return;
         }
-        if (cv.Mat) {
-          done(cv);
-          return;
-        }
-        cv["onRuntimeInitialized"] = () => done(cv);
+        finishWithCv(cv);
       };
       s.onerror = () => {
-        window.clearTimeout(timer);
         fail("Could not load OpenCV for target tracking.");
       };
       document.head.appendChild(s);
@@ -93,19 +88,12 @@ async function loadCv(): Promise<any> {
           const cv = await (m.default || m);
           finishWithCv(cv);
         } catch (err) {
-          window.clearTimeout(timer);
           useCdnFallback();
         }
       })
       .catch(() => {
-        window.clearTimeout(timer);
         useCdnFallback();
       });
-
-    // Guard against a stuck runtime init; the timeout will reject and allow retry.
-    const finalize = () => window.clearTimeout(timer);
-    (window as any).__opencvLoadFinalize = finalize;
-    return () => finalize();
   });
 
   return cvLoading;
