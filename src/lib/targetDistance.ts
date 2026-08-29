@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 // targetDistance.ts
 // Image Target Distance - drop-in replacement for face distance module
 // Helper: opencv.js npm i @techstark/opencv-js OR CDN https://docs.opencv.org/4.9.0/opencv.js
@@ -38,34 +40,35 @@ async function loadCv(): Promise<any> {
       cvLib = w.cv;
       return resolve(cvLib);
     }
-    // try npm package first
-    // @ts-ignore
-    import("@techstark/opencv-js").then((m: any) => {
-      const cv = m.default || m;
-      if (cv.Mat) {
-        cvLib = cv;
-        resolve(cvLib);
-      } else {
-        cv['onRuntimeInitialized'] = () => {
+    // Try the npm package first; OpenCV does not expose a stable ESM type surface.
+    import("@techstark/opencv-js")
+      .then(async (m: any) => {
+        const cv = await (m.default || m);
+        if (cv.Mat) {
           cvLib = cv;
           resolve(cvLib);
+        } else {
+          cv["onRuntimeInitialized"] = () => {
+            cvLib = cv;
+            resolve(cvLib);
+          };
+        }
+      })
+      .catch(() => {
+        // CDN fallback
+        const s = document.createElement("script");
+        s.src = "https://docs.opencv.org/4.9.0/opencv.js";
+        s.async = true;
+        s.onload = () => {
+          const cv = (window as any).cv;
+          cv["onRuntimeInitialized"] = () => {
+            cvLib = cv;
+            resolve(cvLib);
+          };
         };
-      }
-    }).catch(() => {
-      // CDN fallback
-      const s = document.createElement('script');
-      s.src = 'https://docs.opencv.org/4.9.0/opencv.js';
-      s.async = true;
-      s.onload = () => {
-        const cv = (window as any).cv;
-        cv['onRuntimeInitialized'] = () => {
-          cvLib = cv;
-          resolve(cvLib);
-        };
-      };
-      s.onerror = reject;
-      document.head.appendChild(s);
-    });
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
   });
   return cvLoading;
 }
@@ -87,36 +90,42 @@ class ImageTargetTrackerImpl {
   targetKP: any = null;
   targetDesc: any = null;
   targetSize = { w: 0, h: 0 };
+  frameCanvas: HTMLCanvasElement;
 
   constructor(cv: any) {
     this.cv = cv;
     this.orb = new cv.ORB(500);
     this.bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
+    this.frameCanvas = document.createElement("canvas");
   }
 
-  async setTarget(source: HTMLImageElement | HTMLCanvasElement | ImageData | ImageBitmap | HTMLVideoElement): Promise<void> {
+  async setTarget(
+    source: HTMLImageElement | HTMLCanvasElement | ImageData | ImageBitmap | HTMLVideoElement,
+  ): Promise<void> {
     const cv = this.cv;
     let canvas: HTMLCanvasElement;
 
     if (source instanceof ImageData) {
-      canvas = document.createElement('canvas');
+      canvas = document.createElement("canvas");
       canvas.width = source.width;
       canvas.height = source.height;
-      canvas.getContext('2d')!.putImageData(source, 0, 0);
+      canvas.getContext("2d")!.putImageData(source, 0, 0);
     } else if (source instanceof HTMLCanvasElement) {
       canvas = source;
     } else if (source instanceof ImageBitmap) {
-      canvas = document.createElement('canvas');
+      canvas = document.createElement("canvas");
       canvas.width = source.width;
       canvas.height = source.height;
-      canvas.getContext('2d')!.drawImage(source, 0, 0);
+      canvas.getContext("2d")!.drawImage(source, 0, 0);
     } else if (source instanceof HTMLVideoElement || source instanceof HTMLImageElement) {
-      canvas = document.createElement('canvas');
-      canvas.width = (source as any).videoWidth || (source as any).naturalWidth || (source as any).width;
-      canvas.height = (source as any).videoHeight || (source as any).naturalHeight || (source as any).height;
-      canvas.getContext('2d')!.drawImage(source as any, 0, 0, canvas.width, canvas.height);
+      canvas = document.createElement("canvas");
+      canvas.width =
+        (source as any).videoWidth || (source as any).naturalWidth || (source as any).width;
+      canvas.height =
+        (source as any).videoHeight || (source as any).naturalHeight || (source as any).height;
+      canvas.getContext("2d")!.drawImage(source as any, 0, 0, canvas.width, canvas.height);
     } else {
-      throw new Error('Unsupported target source');
+      throw new Error("Unsupported target source");
     }
 
     const mat = matFromImageData(cv, canvas);
@@ -152,7 +161,10 @@ class ImageTargetTrackerImpl {
     this.orb.detectAndCompute(frameGray, new cv.Mat(), kp, desc);
 
     if (desc.rows < 8) {
-      frameMat.delete(); frameGray.delete(); kp.delete(); desc.delete();
+      frameMat.delete();
+      frameGray.delete();
+      kp.delete();
+      desc.delete();
       return this.detectWithTemplate(frameCanvas);
     }
 
@@ -164,28 +176,39 @@ class ImageTargetTrackerImpl {
     for (let i = 0; i < matches.size(); i++) {
       const m = matches.get(i);
       if (m.size() >= 2) {
-        const m1 = m.get(0), m2 = m.get(1);
+        const m1 = m.get(0),
+          m2 = m.get(1);
         if (m1.distance < 0.75 * m2.distance) good.push(m1);
       }
     }
 
     if (good.length < 10) {
-      frameMat.delete(); frameGray.delete(); kp.delete(); desc.delete(); matches.delete();
+      frameMat.delete();
+      frameGray.delete();
+      kp.delete();
+      desc.delete();
+      matches.delete();
       return this.detectWithTemplate(frameCanvas);
     }
 
     // Build point correspondences
-    const srcPts = cv.matFromArray(good.length, 1, cv.CV_32FC2,
+    const srcPts = cv.matFromArray(
+      good.length,
+      1,
+      cv.CV_32FC2,
       good.flatMap((m: any) => {
         const pt = this.targetKP.get(m.queryIdx).pt;
         return [pt.x, pt.y];
-      })
+      }),
     );
-    const dstPts = cv.matFromArray(good.length, 1, cv.CV_32FC2,
+    const dstPts = cv.matFromArray(
+      good.length,
+      1,
+      cv.CV_32FC2,
       good.flatMap((m: any) => {
         const pt = kp.get(m.trainIdx).pt;
         return [pt.x, pt.y];
-      })
+      }),
     );
 
     const mask = new cv.Mat();
@@ -193,28 +216,42 @@ class ImageTargetTrackerImpl {
 
     let result: TargetTrackerResult | null = null;
     if (!H.empty()) {
-      const tl = new cv.Mat(1,1,cv.CV_32FC2); tl.data32F.set([0,0]);
-      const tr = new cv.Mat(1,1,cv.CV_32FC2); tr.data32F.set([this.targetSize.w,0]);
-      const br = new cv.Mat(1,1,cv.CV_32FC2); br.data32F.set([this.targetSize.w,this.targetSize.h]);
-      const bl = new cv.Mat(1,1,cv.CV_32FC2); bl.data32F.set([0,this.targetSize.h]);
+      const tl = new cv.Mat(1, 1, cv.CV_32FC2);
+      tl.data32F.set([0, 0]);
+      const tr = new cv.Mat(1, 1, cv.CV_32FC2);
+      tr.data32F.set([this.targetSize.w, 0]);
+      const br = new cv.Mat(1, 1, cv.CV_32FC2);
+      br.data32F.set([this.targetSize.w, this.targetSize.h]);
+      const bl = new cv.Mat(1, 1, cv.CV_32FC2);
+      bl.data32F.set([0, this.targetSize.h]);
 
       const transform = (p: any) => {
         const dst = new cv.Mat();
         cv.perspectiveTransform(p, dst, H);
-        const x = dst.data32F[0], y = dst.data32F[1];
+        const x = dst.data32F[0],
+          y = dst.data32F[1];
         dst.delete();
         return { x, y };
       };
 
-      const pTL = transform(tl), pTR = transform(tr), pBR = transform(br), pBL = transform(bl);
-      tl.delete(); tr.delete(); br.delete(); bl.delete();
+      const pTL = transform(tl),
+        pTR = transform(tr),
+        pBR = transform(br),
+        pBL = transform(bl);
+      tl.delete();
+      tr.delete();
+      br.delete();
+      bl.delete();
 
-      const w = frameGray.cols, h = frameGray.rows;
-      const widthPx = (Math.hypot(pTR.x-pTL.x, pTR.y-pTL.y) + Math.hypot(pBR.x-pBL.x, pBR.y-pBL.y))/2;
-      const heightPx = (Math.hypot(pBL.x-pTL.x, pBL.y-pTL.y) + Math.hypot(pBR.x-pTR.x, pBR.y-pTR.y))/2;
+      const w = frameGray.cols,
+        h = frameGray.rows;
+      const widthPx =
+        (Math.hypot(pTR.x - pTL.x, pTR.y - pTL.y) + Math.hypot(pBR.x - pBL.x, pBR.y - pBL.y)) / 2;
+      const heightPx =
+        (Math.hypot(pBL.x - pTL.x, pBL.y - pTL.y) + Math.hypot(pBR.x - pTR.x, pBR.y - pTR.y)) / 2;
 
       let inliers = 0;
-      for (let i=0;i<mask.rows;i++) if(mask.data[i]) inliers++;
+      for (let i = 0; i < mask.rows; i++) if (mask.data[i]) inliers++;
       const confidence = inliers / good.length;
 
       if (widthPx > 10 && confidence > 0.15) {
@@ -234,26 +271,38 @@ class ImageTargetTrackerImpl {
       }
     }
 
-    srcPts.delete(); dstPts.delete(); mask.delete(); H.delete();
-    frameMat.delete(); frameGray.delete(); kp.delete(); desc.delete(); matches.delete();
+    srcPts.delete();
+    dstPts.delete();
+    mask.delete();
+    H.delete();
+    frameMat.delete();
+    frameGray.delete();
+    kp.delete();
+    desc.delete();
+    matches.delete();
     return result || this.detectWithTemplate(frameCanvas);
   }
 
-  private detectWithTemplate(frameCanvas: HTMLCanvasElement | HTMLVideoElement): TargetTrackerResult | null {
+  private detectWithTemplate(
+    frameCanvas: HTMLCanvasElement | HTMLVideoElement,
+  ): TargetTrackerResult | null {
     const cv = this.cv;
     const frameMat = matFromImageData(cv, frameCanvas as any);
     const frameGray = new cv.Mat();
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
-    const scales = [0.3,0.5,0.7,0.85,1.0,1.2,1.5,1.8];
-    let bestScore = 0, bestLoc = {x:0,y:0}, bestScale = 1, bestSize = {w:0,h:0};
+    const scales = [0.3, 0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 1.8];
+    let bestScore = 0,
+      bestLoc = { x: 0, y: 0 },
+      bestScale = 1,
+      bestSize = { w: 0, h: 0 };
 
     for (const s of scales) {
       const w = Math.round(this.targetSize.w * s);
       const h = Math.round(this.targetSize.h * s);
-      if (w < 20 || h < 20 || w > frameGray.cols*0.9 || h > frameGray.rows*0.9) continue;
+      if (w < 20 || h < 20 || w > frameGray.cols * 0.9 || h > frameGray.rows * 0.9) continue;
       const resized = new cv.Mat();
-      cv.resize(this.targetGray, resized, new cv.Size(w,h), 0,0, cv.INTER_AREA);
+      cv.resize(this.targetGray, resized, new cv.Size(w, h), 0, 0, cv.INTER_AREA);
       const result = new cv.Mat();
       cv.matchTemplate(frameGray, resized, result, cv.TM_CCOEFF_NORMED);
       const minMax = cv.minMaxLoc(result);
@@ -261,25 +310,34 @@ class ImageTargetTrackerImpl {
         bestScore = minMax.maxVal;
         bestLoc = minMax.maxLoc;
         bestScale = s;
-        bestSize = {w,h};
+        bestSize = { w, h };
       }
-      resized.delete(); result.delete();
+      resized.delete();
+      result.delete();
     }
 
-    frameMat.delete(); frameGray.delete();
+    frameMat.delete();
+    frameGray.delete();
 
     if (bestScore < 0.65) return null;
-    const w = frameCanvas instanceof HTMLVideoElement? frameCanvas.videoWidth : (frameCanvas as HTMLCanvasElement).width;
-    const h = frameCanvas instanceof HTMLVideoElement? frameCanvas.videoHeight : (frameCanvas as HTMLCanvasElement).height;
+    const w =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoWidth
+        : (frameCanvas as HTMLCanvasElement).width;
+    const h =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoHeight
+        : (frameCanvas as HTMLCanvasElement).height;
 
-    const x = bestLoc.x, y = bestLoc.y;
+    const x = bestLoc.x,
+      y = bestLoc.y;
     return {
       detected: true,
       corners: [
         { x: x / w, y: y / h },
-        { x: (x+bestSize.w) / w, y: y / h },
-        { x: (x+bestSize.w) / w, y: (y+bestSize.h) / h },
-        { x: x / w, y: (y+bestSize.h) / h },
+        { x: (x + bestSize.w) / w, y: y / h },
+        { x: (x + bestSize.w) / w, y: (y + bestSize.h) / h },
+        { x: x / w, y: (y + bestSize.h) / h },
       ],
       widthPx: bestSize.w,
       heightPx: bestSize.h,
@@ -289,11 +347,22 @@ class ImageTargetTrackerImpl {
 
   // MediaPipe-like API for drop-in compat
   detectForVideo(video: HTMLVideoElement, _timestamp?: number): TargetTrackerResultList {
-    const r = this.detectFromCanvas(video);
-    return r? { targets: [r] } : { targets: [] };
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) return { targets: [] };
+    if (
+      this.frameCanvas.width !== video.videoWidth ||
+      this.frameCanvas.height !== video.videoHeight
+    ) {
+      this.frameCanvas.width = video.videoWidth;
+      this.frameCanvas.height = video.videoHeight;
+    }
+    this.frameCanvas.getContext("2d")!.drawImage(video, 0, 0);
+    const r = this.detectFromCanvas(this.frameCanvas);
+    return r ? { targets: [r] } : { targets: [] };
   }
 
-  isReady() { return!!this.targetMat; }
+  isReady() {
+    return !!this.targetMat;
+  }
 }
 
 // --- Singleton ---
@@ -319,7 +388,7 @@ export async function getFaceLandmarker(): Promise<ImageTargetTrackerImpl> {
 
 // --- Target management ---
 export async function setTargetFromElement(
-  el: HTMLImageElement | HTMLCanvasElement | ImageData | ImageBitmap | HTMLVideoElement
+  el: HTMLImageElement | HTMLCanvasElement | ImageData | ImageBitmap | HTMLVideoElement,
 ) {
   const t = await getTargetTracker();
   await t.setTarget(el);
@@ -327,27 +396,35 @@ export async function setTargetFromElement(
 
 export async function setTargetFromUrl(url: string) {
   const img = new Image();
-  img.crossOrigin = 'anonymous';
+  img.crossOrigin = "anonymous";
   img.src = url;
-  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+  await new Promise((res, rej) => {
+    img.onload = res;
+    img.onerror = rej;
+  });
   return setTargetFromElement(img);
 }
 
 export async function setTargetFromVideoCrop(
   video: HTMLVideoElement,
-  roi?: { x: number; y: number; w: number; h: number } // normalized 0-1, default center 50%
+  roi?: { x: number; y: number; w: number; h: number }, // normalized 0-1, default center 50%
 ) {
   const r = roi || { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const sx = r.x * vw, sy = r.y * vh, sw = r.w * vw, sh = r.h * vh;
-  const canvas = document.createElement('canvas');
-  canvas.width = sw; canvas.height = sh;
-  canvas.getContext('2d')!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  const vw = video.videoWidth,
+    vh = video.videoHeight;
+  const sx = r.x * vw,
+    sy = r.y * vh,
+    sw = r.w * vw,
+    sh = r.h * vh;
+  const canvas = document.createElement("canvas");
+  canvas.width = sw;
+  canvas.height = sh;
+  canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
   return setTargetFromElement(canvas);
 }
 
 export function isTargetSet(): boolean {
-  return!!tracker?.isReady();
+  return !!tracker?.isReady();
 }
 
 // --- Math - identical to face module ---
@@ -413,9 +490,13 @@ export function ipdPxFromResult(
   if (lm) {
     const leftIris = lm[468];
     const rightIris = lm[473];
-    let a = leftIris, b = rightIris;
-    if (!a ||!b) { a = lm[33]; b = lm[263]; }
-    if (!a ||!b) return null;
+    let a = leftIris,
+      b = rightIris;
+    if (!a || !b) {
+      a = lm[33];
+      b = lm[263];
+    }
+    if (!a || !b) return null;
     const dx = (a.x - b.x) * videoWidth;
     const dy = (a.y - b.y) * videoHeight;
     return Math.hypot(dx, dy);

@@ -7,6 +7,14 @@ import {
   ipdPxFromResult,
 } from "@/lib/faceDistance";
 import {
+  DEFAULT_TARGET_WIDTH_MM,
+  distanceFromTargetWidthPx,
+  getTargetTracker,
+  setTargetFromElement,
+  setTargetFromVideoCrop,
+  targetWidthPxFromResult,
+} from "@/lib/targetDistance";
+import {
   generateTarget,
   sampleTarget,
   type Difficulty,
@@ -78,9 +86,21 @@ function pearsonCorrelation(a: SeriesPoint[], b: SeriesPoint[]): number | null {
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const targetFileRef = useRef<HTMLInputElement>(null);
   const graphViewRef = useRef<HTMLDivElement>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [modelReady, setModelReady] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<"face" | "target">("face");
+  const [targetSet, setTargetSet] = useState(false);
+  const [targetError, setTargetError] = useState<string | null>(null);
+  const [targetDetected, setTargetDetected] = useState(false);
+  const [cropSelection, setCropSelection] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [distance, setDistance] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
@@ -106,7 +126,9 @@ function App() {
   const [regionQuad, setRegionQuad] = useState<QuadraticFit | null>(null);
   const [globalLinear, setGlobalLinear] = useState<LinearFit | null>(null);
   const [globalQuad, setGlobalQuad] = useState<QuadraticFit | null>(null);
-  const [activeView, setActiveView] = useState<"instructions" | "settings" | "graph">("instructions");
+  const [activeView, setActiveView] = useState<"instructions" | "settings" | "graph">(
+    "instructions",
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
@@ -121,11 +143,27 @@ function App() {
         await videoRef.current.play();
       }
       setCameraOn(true);
-      await getFaceLandmarker();
+      if (trackingMode === "face") await getFaceLandmarker();
+      else await getTargetTracker();
       setModelReady(true);
     } catch (e) {
       console.error(e);
       alert("Could not access webcam: " + (e as Error).message);
+    }
+  }, [trackingMode]);
+
+  const changeTrackingMode = useCallback(async (nextMode: "face" | "target") => {
+    setTrackingMode(nextMode);
+    setModelReady(false);
+    setTargetDetected(false);
+    setDistance(null);
+    try {
+      if (nextMode === "face") await getFaceLandmarker();
+      else await getTargetTracker();
+      setModelReady(true);
+    } catch (e) {
+      console.error(e);
+      alert(`Could not load ${nextMode} tracker: ${(e as Error).message}`);
     }
   }, []);
 
@@ -154,16 +192,27 @@ function App() {
     let lastTs = -1;
     const loop = async () => {
       const video = videoRef.current;
-      if (video && video.readyState >= 2) {
+      if (video && video.readyState >= 2 && (trackingMode === "face" || targetSet)) {
         try {
-          const fl = await getFaceLandmarker();
           const ts = performance.now();
           if (ts !== lastTs) {
-            const res = fl.detectForVideo(video, ts);
+            const res =
+              trackingMode === "face"
+                ? (await getFaceLandmarker()).detectForVideo(video, ts)
+                : (await getTargetTracker()).detectForVideo(video, ts);
             lastTs = ts;
-            const ipd = ipdPxFromResult(res, video.videoWidth, video.videoHeight);
-            if (ipd) {
-              const d = distanceFromIpdPx(ipd, video.videoWidth, ipdMm, focalScale);
+            const widthPx =
+              trackingMode === "face"
+                ? ipdPxFromResult(res, video.videoWidth, video.videoHeight)
+                : res.targets[0]
+                  ? targetWidthPxFromResult(res.targets[0], video.videoWidth, video.videoHeight)
+                  : null;
+            setTargetDetected(Boolean(widthPx));
+            if (widthPx) {
+              const d =
+                trackingMode === "face"
+                  ? distanceFromIpdPx(widthPx, video.videoWidth, ipdMm, focalScale)
+                  : distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale);
               if (Number.isFinite(d) && d > 0) {
                 lastDistanceRef.current = d;
                 setDistance(d);
@@ -198,7 +247,108 @@ function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [cameraOn, modelReady, ipdMm, focalScale, recording, target.duration]);
+  }, [
+    cameraOn,
+    modelReady,
+    trackingMode,
+    targetSet,
+    ipdMm,
+    focalScale,
+    recording,
+    target.duration,
+  ]);
+
+  const setUploadedTarget = async (file: File) => {
+    try {
+      setTargetError(null);
+      const image = await createImageBitmap(file);
+      await setTargetFromElement(image);
+      image.close();
+      setTargetSet(true);
+    } catch (e) {
+      setTargetSet(false);
+      setTargetError(`Could not load target: ${(e as Error).message}`);
+    }
+  };
+
+  const cropCameraTarget = async (selection: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) return;
+    try {
+      setTargetError(null);
+      const roi = {
+        x: 1 - selection.left - selection.width,
+        y: selection.top,
+        w: selection.width,
+        h: selection.height,
+      };
+      await setTargetFromVideoCrop(video, roi);
+      setTargetSet(true);
+      const initialWidthPx = selection.width * video.videoWidth;
+      const initialDistance = distanceFromTargetWidthPx(
+        initialWidthPx,
+        video.videoWidth,
+        ipdMm,
+        focalScale,
+      );
+      if (Number.isFinite(initialDistance) && initialDistance > 0) {
+        lastDistanceRef.current = initialDistance;
+        setDistance(initialDistance);
+      }
+    } catch (e) {
+      setTargetError(`Could not crop target: ${(e as Error).message}`);
+    }
+  };
+
+  const handleCropPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    cropStartRef.current = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    setCropSelection({
+      left: cropStartRef.current.x,
+      top: cropStartRef.current.y,
+      width: 0,
+      height: 0,
+    });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleCropPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = cropStartRef.current;
+    if (!start) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left));
+    const y = Math.max(0, Math.min(bounds.height, event.clientY - bounds.top));
+    setCropSelection({
+      left: Math.min(start.x, x),
+      top: Math.min(start.y, y),
+      width: Math.abs(x - start.x),
+      height: Math.abs(y - start.y),
+    });
+  };
+
+  const handleCropPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const selection = cropSelection;
+    cropStartRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (!selection || selection.width < 12 || selection.height < 12) {
+      setCropSelection(null);
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const normalized = {
+      left: selection.left / bounds.width,
+      top: selection.top / bounds.height,
+      width: selection.width / bounds.width,
+      height: selection.height / bounds.height,
+    };
+    setCropSelection(null);
+    void cropCameraTarget(normalized);
+  };
 
   const resetActiveTrial = useCallback(() => {
     samplesRef.current = [];
@@ -227,7 +377,10 @@ function App() {
 
   const buildUserSeriesForSamples = useCallback(
     (inputSamples: Sample[]) => {
-      const pos = inputSamples.map((s) => ({ t: s.t + timeOffset, y: s.d * distScale + distOffset }));
+      const pos = inputSamples.map((s) => ({
+        t: s.t + timeOffset,
+        y: s.d * distScale + distOffset,
+      }));
       if (mode === "position") return pos;
       const smooth = (arr: SeriesPoint[]) => {
         const out: SeriesPoint[] = [];
@@ -268,22 +421,26 @@ function App() {
     [distOffset, distScale, mode, timeOffset],
   );
 
-  const saveCurrentTrial = useCallback((trialSamples?: Sample[]) => {
-    const completedSamples = trialSamples ?? (samplesRef.current.length ? [...samplesRef.current] : [...samples]);
-    if (completedSamples.length) {
-      setTrialHistory((prev) => [
-        ...prev,
-        {
-          id: prev.length + 1,
-          label: `trial_${prev.length + 1}`,
-          samples: completedSamples,
-          targetName: target.name,
-          mode,
-          difficulty,
-        },
-      ]);
-    }
-  }, [difficulty, mode, samples, target.name]);
+  const saveCurrentTrial = useCallback(
+    (trialSamples?: Sample[]) => {
+      const completedSamples =
+        trialSamples ?? (samplesRef.current.length ? [...samplesRef.current] : [...samples]);
+      if (completedSamples.length) {
+        setTrialHistory((prev) => [
+          ...prev,
+          {
+            id: prev.length + 1,
+            label: `trial_${prev.length + 1}`,
+            samples: completedSamples,
+            targetName: target.name,
+            mode,
+            difficulty,
+          },
+        ]);
+      }
+    },
+    [difficulty, mode, samples, target.name],
+  );
 
   const finalizeRecording = useCallback(
     (trialSamples?: Sample[]) => {
@@ -322,7 +479,8 @@ function App() {
     return targetSeries.map((point) => {
       const index = userSeries.findIndex((entry) => entry.t >= point.t);
       if (index <= 0) return { t: point.t, y: userSeries[0]?.y ?? 0 };
-      if (index >= userSeries.length) return { t: point.t, y: userSeries[userSeries.length - 1]?.y ?? 0 };
+      if (index >= userSeries.length)
+        return { t: point.t, y: userSeries[userSeries.length - 1]?.y ?? 0 };
       const current = userSeries[index]!;
       const previous = userSeries[index - 1]!;
       const span = current.t - previous.t;
@@ -332,7 +490,10 @@ function App() {
     });
   }, [targetSeries, userSeries]);
 
-  const correlation = useMemo(() => pearsonCorrelation(targetSeries, alignedUserSeries), [alignedUserSeries, targetSeries]);
+  const correlation = useMemo(
+    () => pearsonCorrelation(targetSeries, alignedUserSeries),
+    [alignedUserSeries, targetSeries],
+  );
   const matchScore = useMemo(() => {
     if (!targetSeries.length || !alignedUserSeries.length) return null;
     const diffs = targetSeries.map((point, index) => {
@@ -344,7 +505,8 @@ function App() {
     if (!validDiffs.length) return null;
     const meanDifference = validDiffs.reduce((sum, value) => sum + value, 0) / validDiffs.length;
     const maxDifference = Math.max(...validDiffs);
-    if (!Number.isFinite(meanDifference) || !Number.isFinite(maxDifference) || maxDifference <= 0) return null;
+    if (!Number.isFinite(meanDifference) || !Number.isFinite(maxDifference) || maxDifference <= 0)
+      return null;
     const normalized = 1 - meanDifference / maxDifference;
     const clamped = Math.max(0, Math.min(5, normalized * 5));
     return Math.round(clamped * 100) / 100;
@@ -366,8 +528,8 @@ function App() {
     target.mode === "position"
       ? "distance (m)"
       : target.mode === "velocity"
-        ? "velocity (m/s)"
-        : "acceleration (m/s²)";
+        ? `${trackingMode === "face" ? "Face" : "Target"} tracker ready`
+        : `Loading ${trackingMode === "face" ? "face" : "target"} tracker...`;
 
   const regionPoints = useMemo(() => {
     if (!region) return [];
@@ -380,7 +542,9 @@ function App() {
   };
 
   const fitAll = () => {
-    const series = buildUserSeriesForSamples(samplesRef.current.length ? samplesRef.current : samples);
+    const series = buildUserSeriesForSamples(
+      samplesRef.current.length ? samplesRef.current : samples,
+    );
     setGlobalLinear(linearRegression(series));
     setGlobalQuad(quadraticRegression(series));
   };
@@ -391,7 +555,6 @@ function App() {
       rows.push(`${s.t.toFixed(4)},${s.d.toFixed(4)}`);
     }
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `kinematics-${Date.now()}.csv`;
@@ -419,7 +582,21 @@ function App() {
 
   const renderCameraPanel = () => (
     <Card title="Camera">
-      <div className="mx-auto flex max-w-[280px] justify-center overflow-hidden rounded-md bg-black">
+      <label className="block text-xs text-slate-400">Tracking source</label>
+      <select
+        value={trackingMode}
+        onChange={(e) => void changeTrackingMode(e.target.value as "face" | "target")}
+        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+      >
+        <option value="face">Face tracking</option>
+        <option value="target">Image target tracking</option>
+      </select>
+      <div
+        className="relative mx-auto flex max-w-[280px] touch-none justify-center overflow-hidden rounded-md bg-black"
+        onPointerDown={trackingMode === "target" && cameraOn ? handleCropPointerDown : undefined}
+        onPointerMove={trackingMode === "target" && cameraOn ? handleCropPointerMove : undefined}
+        onPointerUp={trackingMode === "target" && cameraOn ? handleCropPointerUp : undefined}
+      >
         <video
           ref={videoRef}
           className="aspect-video w-full max-w-[280px]"
@@ -427,6 +604,17 @@ function App() {
           muted
           style={{ transform: "scaleX(-1)" }}
         />
+        {trackingMode === "target" && cameraOn && cropSelection && (
+          <div
+            className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20"
+            style={{
+              left: cropSelection.left,
+              top: cropSelection.top,
+              width: cropSelection.width,
+              height: cropSelection.height,
+            }}
+          />
+        )}
       </div>
       <div className="mt-3 flex items-center justify-between text-sm">
         <span className="text-slate-400">Distance</span>
@@ -434,6 +622,47 @@ function App() {
           {distance ? `${distance.toFixed(2)} m` : "—"}
         </span>
       </div>
+      {trackingMode === "target" && (
+        <div className="mt-3 space-y-2">
+          <input
+            ref={targetFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void setUploadedTarget(file);
+            }}
+          />
+          <div className="flex gap-2">
+            <Button
+              onClick={() => targetFileRef.current?.click()}
+              variant="secondary"
+              className="flex-1"
+            >
+              Upload target
+            </Button>
+            <Button
+              onClick={() =>
+                setTargetError("Drag a rectangle over the camera preview to select the target.")
+              }
+              variant="secondary"
+              disabled={!cameraOn}
+              className="flex-1"
+            >
+              Select region
+            </Button>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            {targetSet
+              ? targetDetected
+                ? "Target detected"
+                : "Target loaded; show it to the camera"
+              : "Upload an item image or crop the center of the feed"}
+          </p>
+          {targetError && <p className="text-[11px] text-rose-400">{targetError}</p>}
+        </div>
+      )}
       {activeView === "instructions" && !cameraOn ? (
         <Button onClick={startCamera} className="mt-3 w-full">
           Start camera
@@ -442,8 +671,8 @@ function App() {
         <p className="mt-3 text-xs text-slate-500">
           {cameraOn
             ? modelReady
-              ? "Camera ready ✓"
-              : "Loading face model…"
+              ? `${trackingMode === "face" ? "Face" : "Target"} tracker ready`
+              : `Loading ${trackingMode === "face" ? "face" : "target"} tracker...`
             : "Camera not active"}
         </p>
       )}
@@ -455,19 +684,32 @@ function App() {
       <Card title="Instructions">
         <ol className="list-decimal space-y-1 pl-4 text-xs text-slate-400">
           <li>Allow webcam access.</li>
-          <li>Stand ~1 m from the camera and calibrate.</li>
+          <li>
+            {trackingMode === "face"
+              ? "Stand ~1 m from the camera and calibrate."
+              : "Load a target, enter its real width, then calibrate."}
+          </li>
           <li>Pick a target graph and difficulty.</li>
-          <li>Press <b>Start recording</b> and move to match the amber curve.</li>
+          <li>
+            Press <b>Start recording</b> and move to match the amber curve.
+          </li>
           <li>Use region select + regression to analyze motion.</li>
         </ol>
       </Card>
 
       <Card title="Calibration">
-        <label className="block text-xs text-slate-400">Interpupillary distance (mm)</label>
+        <label className="block text-xs text-slate-400">
+          {trackingMode === "face" ? "Interpupillary distance (mm)" : "Target width (mm)"}
+        </label>
         <input
           type="number"
           value={ipdMm}
-          onChange={(e) => setIpdMm(parseFloat(e.target.value) || DEFAULT_IPD_MM)}
+          onChange={(e) =>
+            setIpdMm(
+              parseFloat(e.target.value) ||
+                (trackingMode === "face" ? DEFAULT_IPD_MM : DEFAULT_TARGET_WIDTH_MM),
+            )
+          }
           className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
         />
         <label className="mt-3 block text-xs text-slate-400">
@@ -487,7 +729,6 @@ function App() {
         </div>
         <p className="mt-2 text-[11px] text-slate-500">Focal scale: {focalScale.toFixed(3)}</p>
       </Card>
-
     </div>
   );
 
@@ -570,7 +811,11 @@ function App() {
           </p>
         )}
         <div className="mt-2 flex gap-2">
-          <Button onClick={fitRegion} disabled={!region || regionPoints.length < 3} variant="secondary">
+          <Button
+            onClick={fitRegion}
+            disabled={!region || regionPoints.length < 3}
+            variant="secondary"
+          >
             Fit region
           </Button>
           <Button onClick={fitAll} disabled={userSeries.length < 3} variant="secondary">
@@ -579,16 +824,36 @@ function App() {
         </div>
         <div className="mt-3 space-y-2 text-xs">
           {regionLinear && (
-            <FitRow color="#a3e635" title="Region linear" fit={regionLinear.formula} r2={regionLinear.r2} />
+            <FitRow
+              color="#a3e635"
+              title="Region linear"
+              fit={regionLinear.formula}
+              r2={regionLinear.r2}
+            />
           )}
           {regionQuad && (
-            <FitRow color="#f472b6" title="Region quadratic" fit={regionQuad.formula} r2={regionQuad.r2} />
+            <FitRow
+              color="#f472b6"
+              title="Region quadratic"
+              fit={regionQuad.formula}
+              r2={regionQuad.r2}
+            />
           )}
           {globalLinear && (
-            <FitRow color="#22d3ee" title="Global linear" fit={globalLinear.formula} r2={globalLinear.r2} />
+            <FitRow
+              color="#22d3ee"
+              title="Global linear"
+              fit={globalLinear.formula}
+              r2={globalLinear.r2}
+            />
           )}
           {globalQuad && (
-            <FitRow color="#c084fc" title="Global quadratic" fit={globalQuad.formula} r2={globalQuad.r2} />
+            <FitRow
+              color="#c084fc"
+              title="Global quadratic"
+              fit={globalQuad.formula}
+              r2={globalQuad.r2}
+            />
           )}
         </div>
       </Card>
@@ -597,7 +862,10 @@ function App() {
 
   const renderGraphView = () => (
     <div className="space-y-4">
-      <section ref={graphViewRef} className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+      <section
+        ref={graphViewRef}
+        className="rounded-lg border border-slate-800 bg-slate-900/40 p-3"
+      >
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
           <div>
             <span className="text-slate-400">Target: </span>
@@ -610,7 +878,7 @@ function App() {
             <Button
               onClick={recording ? stopRecording : startRecording}
               variant={recording ? "danger" : "secondary"}
-              disabled={!cameraOn}
+              disabled={!cameraOn || (trackingMode === "target" && !targetSet)}
             >
               {recording ? "Stop recording" : "Start recording"}
             </Button>
@@ -751,7 +1019,9 @@ function App() {
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{title}</h2>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+        {title}
+      </h2>
       {children}
     </div>
   );
@@ -827,7 +1097,17 @@ function Legend({ color, label }: { color: string; label: string }) {
   );
 }
 
-function FitRow({ color, title, fit, r2 }: { color: string; title: string; fit: string; r2: number }) {
+function FitRow({
+  color,
+  title,
+  fit,
+  r2,
+}: {
+  color: string;
+  title: string;
+  fit: string;
+  r2: number;
+}) {
   return (
     <div className="rounded border border-slate-800 bg-slate-950/60 p-2">
       <div className="flex items-center gap-2">
