@@ -483,12 +483,10 @@ function App() {
       const tracker = await getTargetTracker();
       const resultList = tracker.detectForVideo(video, performance.now());
       const firstTarget = resultList.targets[0];
-      if (!firstTarget) {
-        setTargetError("No target was detected in the current frame.");
-        return;
-      }
 
-      const widthPx = targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight);
+      const widthPx = firstTarget
+        ? targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight)
+        : null;
       const frameDistance = widthPx
         ? distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale)
         : null;
@@ -500,18 +498,23 @@ function App() {
       if (!ctx) return;
 
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const corners = firstTarget.corners;
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x * canvas.width, corners[0].y * canvas.height);
-      corners.slice(1).forEach((corner) => {
-        ctx.lineTo(corner.x * canvas.width, corner.y * canvas.height);
-      });
-      ctx.closePath();
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "#22d3ee";
-      ctx.stroke();
 
-      const label = `Estimated distance: ${frameDistance !== null ? `${frameDistance.toFixed(2)} m` : "n/a"}`;
+      if (firstTarget) {
+        const corners = firstTarget.corners;
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x * canvas.width, corners[0].y * canvas.height);
+        corners.slice(1).forEach((corner) => {
+          ctx.lineTo(corner.x * canvas.width, corner.y * canvas.height);
+        });
+        ctx.closePath();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#22d3ee";
+        ctx.stroke();
+      }
+
+      const label = firstTarget
+        ? `Estimated distance: ${frameDistance !== null ? `${frameDistance.toFixed(2)} m` : "n/a"}`
+        : "Target not detected";
       const fontSize = 18;
       ctx.font = `600 ${fontSize}px sans-serif`;
       const metrics = ctx.measureText(label);
@@ -520,9 +523,9 @@ function App() {
       const boxWidth = metrics.width + 24;
       const boxHeight = fontSize + 16;
 
-      ctx.fillStyle = "rgba(15, 23, 42, 0.7)";
+      ctx.fillStyle = firstTarget ? "rgba(15, 23, 42, 0.7)" : "rgba(127, 29, 29, 0.7)";
       ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
-      ctx.strokeStyle = "#22d3ee";
+      ctx.strokeStyle = firstTarget ? "#22d3ee" : "#f87171";
       ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
       ctx.fillStyle = "#e2f4ff";
       ctx.fillText(label, boxX + 12, boxY + 26);
@@ -535,7 +538,7 @@ function App() {
         ].slice(0, 3);
         return next;
       });
-      setTargetError(null);
+      setTargetError(firstTarget ? null : "Frame captured; no target was found in this view.");
     } catch (e) {
       console.error("debug frame capture failed", e);
       setTargetError("Could not capture a debug frame.");

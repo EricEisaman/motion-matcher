@@ -314,7 +314,11 @@ class ImageTargetTrackerImpl {
     const frameGray = new cv.Mat();
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
-    const scales = [0.3, 0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 1.8];
+    // For a printed paper target, template matching is more robust than ORB feature matching.
+    // We search the full frame at multiple scales, but we keep the acceptance threshold low enough
+    // to avoid missing a valid target just because it is slightly skewed, partially occluded, or
+    // not perfectly aligned with the saved template.
+    const scales = [0.45, 0.6, 0.8, 1.0, 1.25, 1.5, 1.8];
     const frameWidth =
       frameCanvas instanceof HTMLVideoElement
         ? frameCanvas.videoWidth
@@ -350,7 +354,7 @@ class ImageTargetTrackerImpl {
     frameMat.delete();
     frameGray.delete();
 
-    if (bestScore < 0.85) return null;
+    if (bestScore < 0.3) return null;
 
     const x = bestLoc.x,
       y = bestLoc.y;
