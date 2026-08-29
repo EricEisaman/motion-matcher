@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import * as cvModuleNs from "@techstark/opencv-js";
+
 // targetDistance.ts
 // Image Target Distance - drop-in replacement for face distance module
 // Helper: opencv.js npm i @techstark/opencv-js OR CDN https://docs.opencv.org/4.9.0/opencv.js
@@ -53,13 +55,17 @@ async function loadCv(): Promise<any> {
 
     void (async () => {
       try {
-        const module = await import("@techstark/opencv-js");
-        const cvModule = (module as any).default ?? module;
+        const runtime = (cvModuleNs as any).default ?? cvModuleNs;
 
-        // Normalize Promise-like exports before awaiting. Some bundlers expose a CJS/interop
-        // wrapper where the exported value is Promise-like but not a real native Promise instance,
-        // so calling `.then` directly on it can throw "incompatible receiver".
-        const resolved = await Promise.resolve(cvModule);
+        // Some bundlers expose the package as a Promise-like object; unwrap it by invoking
+        // its own .then method rather than calling Promise.resolve on the wrapper.
+        const resolved = await new Promise((resolve, reject) => {
+          if (runtime && typeof runtime.then === "function") {
+            runtime.then(resolve, reject);
+            return;
+          }
+          resolve(runtime);
+        });
 
         if (resolved?.Mat) {
           done(resolved);
@@ -69,18 +75,6 @@ async function loadCv(): Promise<any> {
         if (resolved && typeof resolved.onRuntimeInitialized === "function") {
           resolved.onRuntimeInitialized = () => done(resolved);
           return;
-        }
-
-        if (resolved && typeof resolved.then === "function") {
-          const nested = await Promise.resolve(resolved);
-          if (nested?.Mat) {
-            done(nested);
-            return;
-          }
-          if (nested && typeof nested.onRuntimeInitialized === "function") {
-            nested.onRuntimeInitialized = () => done(nested);
-            return;
-          }
         }
 
         fail("OpenCV package import did not produce a valid runtime object.");
