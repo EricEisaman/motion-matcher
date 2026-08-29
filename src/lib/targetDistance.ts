@@ -35,74 +35,56 @@ async function loadCv(): Promise<any> {
   if (cvLib) return cvLib;
   if (cvLoading) return cvLoading;
 
-  console.debug("target tracker: loading OpenCV");
+  console.debug("target tracker: loading OpenCV from npm package");
 
   cvLoading = new Promise((resolve, reject) => {
-    const w = window as any;
     const fail = (message: string, err?: unknown) => {
       console.error("target tracker: OpenCV load failed", { message, err });
       cvLoading = null;
       reject(err instanceof Error ? err : new Error(message));
     };
+
     const done = (cv: any) => {
-      console.debug("target tracker: OpenCV ready", { mat: !!cv?.Mat, keys: Object.keys(cv || {}).slice(0, 10) });
+      console.debug("target tracker: OpenCV ready", { hasMat: !!cv?.Mat });
       cvLib = cv;
       cvLoading = null;
       resolve(cvLib);
     };
 
-    if (w.cv && w.cv.Mat) {
-      console.debug("target tracker: OpenCV already available on window");
-      return done(w.cv);
-    }
+    void (async () => {
+      try {
+        const module = await import("@techstark/opencv-js");
+        const cvModule = (module as any).default ?? module;
 
-    const finishWithCv = (cv: any) => {
-      if (!cv) {
-        fail("OpenCV runtime did not initialize.");
-        return;
-      }
-      if (cv.Mat) {
-        done(cv);
-        return;
-      }
-      console.debug("target tracker: waiting for onRuntimeInitialized");
-      cv["onRuntimeInitialized"] = () => done(cv);
-    };
-
-    const useCdnFallback = () => {
-      console.debug("target tracker: falling back to CDN OpenCV script");
-      const s = document.createElement("script");
-      s.src = "https://docs.opencv.org/4.9.0/opencv.js";
-      s.async = true;
-      s.onload = () => {
-        const cv = (window as any).cv;
-        if (!cv) {
-          fail("OpenCV script loaded without a window.cv object.");
+        if (cvModule instanceof Promise) {
+          const cv = await cvModule;
+          if (cv?.Mat) {
+            done(cv);
+            return;
+          }
+          if (cv && typeof cv.onRuntimeInitialized === "function") {
+            cv.onRuntimeInitialized = () => done(cv);
+            return;
+          }
+          fail("OpenCV package resolved but did not expose the runtime object.");
           return;
         }
-        finishWithCv(cv);
-      };
-      s.onerror = () => {
-        fail("Could not load OpenCV for target tracking.");
-      };
-      document.head.appendChild(s);
-    };
 
-    import("@techstark/opencv-js")
-      .then(async (m: any) => {
-        try {
-          const cv = await (m.default || m);
-          console.debug("target tracker: npm OpenCV module resolved", { hasMat: !!cv?.Mat });
-          finishWithCv(cv);
-        } catch (err) {
-          console.warn("target tracker: npm OpenCV import failed, retrying via CDN", err);
-          useCdnFallback();
+        if (cvModule?.Mat) {
+          done(cvModule);
+          return;
         }
-      })
-      .catch((err) => {
-        console.warn("target tracker: npm OpenCV import not available, retrying via CDN", err);
-        useCdnFallback();
-      });
+
+        if (cvModule && typeof cvModule.onRuntimeInitialized === "function") {
+          cvModule.onRuntimeInitialized = () => done(cvModule);
+          return;
+        }
+
+        fail("OpenCV package import did not produce a valid runtime object.");
+      } catch (err) {
+        fail("Could not load OpenCV from the installed npm package.", err);
+      }
+    })();
   });
 
   return cvLoading;
