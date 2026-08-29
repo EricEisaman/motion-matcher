@@ -6,8 +6,8 @@ import * as cvModuleNs from "@techstark/opencv-js";
 // Image Target Distance - drop-in replacement for face distance module
 // Helper: opencv.js npm i @techstark/opencv-js OR CDN https://docs.opencv.org/4.9.0/opencv.js
 
-export const DEFAULT_TARGET_WIDTH_MM = 63; // physical width of your target, change to real size
-export const DEFAULT_IPD_MM = DEFAULT_TARGET_WIDTH_MM; // alias for identical interface
+export const DEFAULT_TARGET_WIDTH_MM = 210; // default target width in mm (A4 sheet width)
+export const DEFAULT_IPD_MM = 63; // average human interpupillary distance in mm
 
 // --- Types ---
 export type NormalizedPoint = { x: number; y: number }; // 0-1
@@ -59,7 +59,7 @@ async function loadCv(): Promise<any> {
 
         // Some bundlers expose the package as a Promise-like object; unwrap it by invoking
         // its own .then method rather than calling Promise.resolve on the wrapper.
-        const resolved: any = await new Promise((resolve, reject) => {
+        const resolved: any = await new Promise<any>((resolve, reject) => {
           if (runtime && typeof runtime.then === "function") {
             runtime.then(resolve, reject);
             return;
@@ -165,6 +165,15 @@ class ImageTargetTrackerImpl {
     if (!this.targetDesc || this.targetDesc.rows < 8) {
       return this.detectWithTemplate(frameCanvas);
     }
+
+    const w =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoWidth
+        : (frameCanvas as HTMLCanvasElement).width;
+    const h =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoHeight
+        : (frameCanvas as HTMLCanvasElement).height;
 
     const frameMat = matFromImageData(cv, frameCanvas as any);
     const frameGray = new cv.Mat();
@@ -306,17 +315,25 @@ class ImageTargetTrackerImpl {
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
     const scales = [0.3, 0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 1.8];
+    const frameWidth =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoWidth
+        : (frameCanvas as HTMLCanvasElement).width;
+    const frameHeight =
+      frameCanvas instanceof HTMLVideoElement
+        ? frameCanvas.videoHeight
+        : (frameCanvas as HTMLCanvasElement).height;
     let bestScore = 0,
       bestLoc = { x: 0, y: 0 },
       bestScale = 1,
       bestSize = { w: 0, h: 0 };
 
     for (const s of scales) {
-      const w = Math.round(this.targetSize.w * s);
-      const h = Math.round(this.targetSize.h * s);
-      if (w < 20 || h < 20 || w > frameGray.cols * 0.9 || h > frameGray.rows * 0.9) continue;
+      const targetW = Math.round(this.targetSize.w * s);
+      const targetH = Math.round(this.targetSize.h * s);
+      if (targetW < 20 || targetH < 20 || targetW > frameGray.cols * 0.9 || targetH > frameGray.rows * 0.9) continue;
       const resized = new cv.Mat();
-      cv.resize(this.targetGray, resized, new cv.Size(w, h), 0, 0, cv.INTER_AREA);
+      cv.resize(this.targetGray, resized, new cv.Size(targetW, targetH), 0, 0, cv.INTER_AREA);
       const result = new cv.Mat();
       cv.matchTemplate(frameGray, resized, result, cv.TM_CCOEFF_NORMED);
       const minMax = cv.minMaxLoc(result);
@@ -324,7 +341,7 @@ class ImageTargetTrackerImpl {
         bestScore = minMax.maxVal;
         bestLoc = minMax.maxLoc;
         bestScale = s;
-        bestSize = { w, h };
+        bestSize = { w: targetW, h: targetH };
       }
       resized.delete();
       result.delete();
@@ -333,25 +350,18 @@ class ImageTargetTrackerImpl {
     frameMat.delete();
     frameGray.delete();
 
-    if (bestScore < 0.65) return null;
-    const w =
-      frameCanvas instanceof HTMLVideoElement
-        ? frameCanvas.videoWidth
-        : (frameCanvas as HTMLCanvasElement).width;
-    const h =
-      frameCanvas instanceof HTMLVideoElement
-        ? frameCanvas.videoHeight
-        : (frameCanvas as HTMLCanvasElement).height;
+    if (bestScore < 0.85) return null;
 
     const x = bestLoc.x,
       y = bestLoc.y;
+
     return {
       detected: true,
       corners: [
-        { x: x / w, y: y / h },
-        { x: (x + bestSize.w) / w, y: y / h },
-        { x: (x + bestSize.w) / w, y: (y + bestSize.h) / h },
-        { x: x / w, y: (y + bestSize.h) / h },
+        { x: x / frameWidth, y: y / frameHeight },
+        { x: (x + bestSize.w) / frameWidth, y: y / frameHeight },
+        { x: (x + bestSize.w) / frameWidth, y: (y + bestSize.h) / frameHeight },
+        { x: x / frameWidth, y: (y + bestSize.h) / frameHeight },
       ],
       widthPx: bestSize.w,
       heightPx: bestSize.h,

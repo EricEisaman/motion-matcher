@@ -238,7 +238,23 @@ function App() {
                 }
               }
             } else {
-              const res = (await getTargetTracker()).detectForVideo(video, ts);
+              const res = (await getTargetTracker()).detectForVideo(video, ts) as {
+                targets: Array<
+                  | {
+                      detected: boolean;
+                      corners: [
+                        { x: number; y: number },
+                        { x: number; y: number },
+                        { x: number; y: number },
+                        { x: number; y: number },
+                      ];
+                      widthPx: number;
+                      heightPx: number;
+                      confidence: number;
+                    }
+                  | undefined
+                >;
+              };
               const firstTarget = res.targets[0];
               const widthPx = firstTarget
                 ? targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight)
@@ -734,12 +750,12 @@ function App() {
       rows.push(`${s.t.toFixed(4)},${s.d.toFixed(4)}`);
     }
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = objectUrl;
     a.download = `kinematics-${Date.now()}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(objectUrl);
   };
 
   const newTarget = useCallback(() => {
