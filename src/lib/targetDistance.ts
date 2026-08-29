@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import * as cvModuleNs from "@techstark/opencv-js";
 
 // targetDistance.ts
@@ -10,6 +8,94 @@ export const DEFAULT_TARGET_WIDTH_MM = 210; // default target width in mm (A4 sh
 export const DEFAULT_IPD_MM = 63; // average human interpupillary distance in mm
 
 // --- Types ---
+type OpenCvPoint = { x: number; y: number };
+type OpenCvMat = {
+  rows: number;
+  cols: number;
+  data: Uint8Array | number[] | Float32Array | Float64Array;
+  data32F: Float32Array;
+  data64F: Float64Array;
+  empty: () => boolean;
+  delete: () => void;
+};
+
+type OpenCvKeyPoint = { pt: OpenCvPoint };
+type OpenCvKeyPointVector = {
+  get: (index: number) => OpenCvKeyPoint;
+  size: () => number;
+  delete: () => void;
+};
+type OpenCvDMatch = { distance: number; queryIdx: number; trainIdx: number };
+type OpenCvDMatchVector = {
+  size: () => number;
+  get: (index: number) => OpenCvDMatch;
+  delete: () => void;
+};
+type OpenCvDMatchVectorVector = {
+  size: () => number;
+  get: (index: number) => OpenCvDMatchVector;
+  delete: () => void;
+};
+type OpenCvMatchResult = {
+  maxVal: number;
+  maxLoc: OpenCvPoint;
+};
+type OpenCvRuntime = {
+  Mat: new (...args: unknown[]) => OpenCvMat;
+  ORB: new (nfeatures?: number) => {
+    detectAndCompute: (
+      src: OpenCvMat,
+      mask: OpenCvMat,
+      keypoints: OpenCvKeyPointVector,
+      descriptors: OpenCvMat,
+    ) => void;
+  };
+  BFMatcher: new (type: number, crossCheck: boolean) => {
+    knnMatch: (
+      query: OpenCvMat,
+      train: OpenCvMat,
+      matches: OpenCvDMatchVectorVector,
+      k: number,
+    ) => void;
+  };
+  KeyPointVector: new () => OpenCvKeyPointVector;
+  DMatchVectorVector: new () => OpenCvDMatchVectorVector;
+  Size: new (width: number, height: number) => unknown;
+  COLOR_RGBA2GRAY: number;
+  TM_CCOEFF_NORMED: number;
+  NORM_HAMMING: number;
+  RANSAC: number;
+  INTER_AREA: number;
+  CV_32FC2: number;
+  matFromArray: (rows: number, cols: number, type: number, data: number[]) => OpenCvMat;
+  matFromImageData: (imgData: ImageData) => OpenCvMat;
+  imread: (src: CanvasImageSource | ImageData) => OpenCvMat;
+  cvtColor: (src: OpenCvMat, dst: OpenCvMat, code: number, channel?: number) => void;
+  resize: (
+    src: OpenCvMat,
+    dst: OpenCvMat,
+    dsize: unknown,
+    fx: number,
+    fy: number,
+    interpolation: number,
+  ) => void;
+  matchTemplate: (src: OpenCvMat, templ: OpenCvMat, result: OpenCvMat, method: number) => void;
+  minMaxLoc: (src: OpenCvMat) => OpenCvMatchResult;
+  findHomography: (
+    src: OpenCvMat,
+    dst: OpenCvMat,
+    method: number,
+    ransacReprojThreshold: number,
+    mask: OpenCvMat,
+  ) => OpenCvMat;
+  perspectiveTransform: (src: OpenCvMat, dst: OpenCvMat, H: OpenCvMat) => void;
+  onRuntimeInitialized?: (() => void) | null;
+};
+
+type OpenCvRuntimeLike = OpenCvRuntime & {
+  then: (resolve: (value: OpenCvRuntime) => void, reject: (reason?: unknown) => void) => void;
+};
+
 export type NormalizedPoint = { x: number; y: number }; // 0-1
 export interface TargetTrackerResult {
   detected: boolean;
@@ -27,13 +113,13 @@ export interface TargetTrackerResultList {
 }
 
 // Union for backward compat with FaceLandmarkerResult
-export type AnyResult = TargetTrackerResult | TargetTrackerResultList | any;
+export type AnyResult = TargetTrackerResult | TargetTrackerResultList | Record<string, unknown>;
 
 // --- OpenCV loader ---
-let cvLib: any = null;
-let cvLoading: Promise<any> | null = null;
+let cvLib: OpenCvRuntime | null = null;
+let cvLoading: Promise<OpenCvRuntime> | null = null;
 
-async function loadCv(): Promise<any> {
+async function loadCv(): Promise<OpenCvRuntime> {
   if (cvLib) return cvLib;
   if (cvLoading) return cvLoading;
 
@@ -46,7 +132,7 @@ async function loadCv(): Promise<any> {
       reject(err instanceof Error ? err : new Error(message));
     };
 
-    const done = (cv: any) => {
+    const done = (cv: OpenCvRuntime) => {
       console.debug("target tracker: OpenCV ready", { hasMat: !!cv?.Mat });
       cvLib = cv;
       cvLoading = null;
@@ -55,17 +141,17 @@ async function loadCv(): Promise<any> {
 
     void (async () => {
       try {
-        const runtime: any = (cvModuleNs as any).default ?? cvModuleNs;
+        const runtime = (cvModuleNs as { default?: OpenCvRuntime }).default ?? (cvModuleNs as unknown as OpenCvRuntime);
 
         // Some bundlers expose the package as a Promise-like object; unwrap it by invoking
         // its own .then method rather than calling Promise.resolve on the wrapper.
-        const resolved: any = await new Promise<any>((resolve, reject) => {
-          if (runtime && typeof runtime.then === "function") {
-            runtime.then(resolve, reject);
-            return;
-          }
-          resolve(runtime);
-        });
+        const resolved = await (
+          runtime && typeof (runtime as Partial<OpenCvRuntimeLike>).then === "function"
+            ? new Promise<OpenCvRuntime>((resolve, reject) => {
+                (runtime as OpenCvRuntimeLike).then(resolve, reject);
+              })
+            : Promise.resolve(runtime)
+        );
 
         if (resolved?.Mat) {
           done(resolved);
@@ -87,26 +173,43 @@ async function loadCv(): Promise<any> {
   return cvLoading;
 }
 
-function matFromImageData(cv: any, imgData: ImageData | HTMLCanvasElement | HTMLImageElement): any {
+function matFromImageData(
+  cv: OpenCvRuntime,
+  imgData: ImageData | HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
+): OpenCvMat {
   if (imgData instanceof ImageData) {
     return cv.matFromImageData(imgData);
   }
-  return cv.imread(imgData as any);
+  return cv.imread(imgData as CanvasImageSource | ImageData);
 }
 
 // --- Core Tracker ---
 class ImageTargetTrackerImpl {
-  cv: any;
-  orb: any;
-  bf: any;
-  targetMat: any = null;
-  targetGray: any = null;
-  targetKP: any = null;
-  targetDesc: any = null;
+  cv: OpenCvRuntime;
+  orb: {
+    detectAndCompute: (
+      src: OpenCvMat,
+      mask: OpenCvMat,
+      keypoints: OpenCvKeyPointVector,
+      descriptors: OpenCvMat,
+    ) => void;
+  };
+  bf: {
+    knnMatch: (
+      query: OpenCvMat,
+      train: OpenCvMat,
+      matches: OpenCvDMatchVectorVector,
+      k: number,
+    ) => void;
+  };
+  targetMat: OpenCvMat | null = null;
+  targetGray: OpenCvMat | null = null;
+  targetKP: OpenCvKeyPointVector | null = null;
+  targetDesc: OpenCvMat | null = null;
   targetSize = { w: 0, h: 0 };
   frameCanvas: HTMLCanvasElement;
 
-  constructor(cv: any) {
+  constructor(cv: OpenCvRuntime) {
     this.cv = cv;
     this.orb = new cv.ORB(500);
     this.bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
@@ -134,10 +237,16 @@ class ImageTargetTrackerImpl {
     } else if (source instanceof HTMLVideoElement || source instanceof HTMLImageElement) {
       canvas = document.createElement("canvas");
       canvas.width =
-        (source as any).videoWidth || (source as any).naturalWidth || (source as any).width;
+        (source as HTMLVideoElement).videoWidth ||
+        (source as HTMLImageElement).naturalWidth ||
+        (source as HTMLVideoElement).width ||
+        (source as HTMLImageElement).width;
       canvas.height =
-        (source as any).videoHeight || (source as any).naturalHeight || (source as any).height;
-      canvas.getContext("2d", { willReadFrequently: true })!.drawImage(source as any, 0, 0, canvas.width, canvas.height);
+        (source as HTMLVideoElement).videoHeight ||
+        (source as HTMLImageElement).naturalHeight ||
+        (source as HTMLVideoElement).height ||
+        (source as HTMLImageElement).height;
+      canvas.getContext("2d", { willReadFrequently: true })!.drawImage(source as CanvasImageSource, 0, 0, canvas.width, canvas.height);
     } else {
       throw new Error("Unsupported target source");
     }
@@ -175,7 +284,7 @@ class ImageTargetTrackerImpl {
         ? frameCanvas.videoHeight
         : (frameCanvas as HTMLCanvasElement).height;
 
-    const frameMat = matFromImageData(cv, frameCanvas as any);
+    const frameMat = matFromImageData(cv, frameCanvas as HTMLCanvasElement | HTMLImageElement);
     const frameGray = new cv.Mat();
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
@@ -195,7 +304,7 @@ class ImageTargetTrackerImpl {
     this.bf.knnMatch(this.targetDesc, desc, matches, 2);
 
     // Lowe ratio
-    const good: any[] = [];
+    const good: Array<{ distance: number; queryIdx: number; trainIdx: number }> = [];
     for (let i = 0; i < matches.size(); i++) {
       const m = matches.get(i);
       if (m.size() >= 2) {
@@ -219,8 +328,8 @@ class ImageTargetTrackerImpl {
       good.length,
       1,
       cv.CV_32FC2,
-      good.flatMap((m: any) => {
-        const pt = this.targetKP.get(m.queryIdx).pt;
+      good.flatMap((m) => {
+        const pt = this.targetKP!.get(m.queryIdx).pt;
         return [pt.x, pt.y];
       }),
     );
@@ -228,7 +337,7 @@ class ImageTargetTrackerImpl {
       good.length,
       1,
       cv.CV_32FC2,
-      good.flatMap((m: any) => {
+      good.flatMap((m) => {
         const pt = kp.get(m.trainIdx).pt;
         return [pt.x, pt.y];
       }),
@@ -248,7 +357,7 @@ class ImageTargetTrackerImpl {
       const bl = new cv.Mat(1, 1, cv.CV_32FC2);
       bl.data32F.set([0, this.targetSize.h]);
 
-      const transform = (p: any) => {
+      const transform = (p: OpenCvMat) => {
         const dst = new cv.Mat();
         cv.perspectiveTransform(p, dst, H);
         const x = dst.data32F[0],
@@ -310,7 +419,7 @@ class ImageTargetTrackerImpl {
     frameCanvas: HTMLCanvasElement | HTMLVideoElement,
   ): TargetTrackerResult | null {
     const cv = this.cv;
-    const frameMat = matFromImageData(cv, frameCanvas as any);
+    const frameMat = matFromImageData(cv, frameCanvas as HTMLCanvasElement | HTMLVideoElement);
     const frameGray = new cv.Mat();
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
@@ -334,6 +443,10 @@ class ImageTargetTrackerImpl {
       const targetW = Math.round(this.targetSize.w * s);
       const targetH = Math.round(this.targetSize.h * s);
       if (targetW < 20 || targetH < 20 || targetW > frameGray.cols * 0.9 || targetH > frameGray.rows * 0.9) continue;
+
+      if (!this.targetGray) {
+        continue;
+      }
 
       const resized = new cv.Mat();
       cv.resize(this.targetGray, resized, new cv.Size(targetW, targetH), 0, 0, cv.INTER_AREA);
@@ -518,30 +631,35 @@ export function ipdPxFromResult(
   videoHeight: number,
 ): number | null {
   if (!result) return null;
-  // New format: {targets: [r]}
-  if (result.targets?.[0]) {
-    return targetWidthPxFromResult(result.targets[0], videoWidth, videoHeight);
+
+  if (typeof result === "object" && "targets" in result && Array.isArray((result as TargetTrackerResultList).targets)) {
+    const first = (result as TargetTrackerResultList).targets[0];
+    if (first) return targetWidthPxFromResult(first, videoWidth, videoHeight);
   }
-  // Direct TargetTrackerResult
-  if (result.corners) {
+
+  if (typeof result === "object" && "corners" in result && Array.isArray((result as TargetTrackerResult).corners)) {
     return targetWidthPxFromResult(result as TargetTrackerResult, videoWidth, videoHeight);
   }
-  // Legacy FaceLandmarkerResult fallback - keep old logic if passed
-  const lm = result.faceLandmarks?.[0];
-  if (lm) {
-    const leftIris = lm[468];
-    const rightIris = lm[473];
-    let a = leftIris,
-      b = rightIris;
-    if (!a || !b) {
-      a = lm[33];
-      b = lm[263];
+
+  if (typeof result === "object" && "faceLandmarks" in result) {
+    const faceLandmarks = (result as { faceLandmarks?: Array<Array<{ x: number; y: number }>> }).faceLandmarks;
+    const lm = faceLandmarks?.[0];
+    if (lm) {
+      const leftIris = lm[468];
+      const rightIris = lm[473];
+      let a = leftIris,
+        b = rightIris;
+      if (!a || !b) {
+        a = lm[33];
+        b = lm[263];
+      }
+      if (!a || !b) return null;
+      const dx = (a.x - b.x) * videoWidth;
+      const dy = (a.y - b.y) * videoHeight;
+      return Math.hypot(dx, dy);
     }
-    if (!a || !b) return null;
-    const dx = (a.x - b.x) * videoWidth;
-    const dy = (a.y - b.y) * videoHeight;
-    return Math.hypot(dx, dy);
   }
+
   return null;
 }
 
