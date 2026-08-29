@@ -56,28 +56,31 @@ async function loadCv(): Promise<any> {
         const module = await import("@techstark/opencv-js");
         const cvModule = (module as any).default ?? module;
 
-        if (cvModule instanceof Promise) {
-          const cv = await cvModule;
-          if (cv?.Mat) {
-            done(cv);
-            return;
-          }
-          if (cv && typeof cv.onRuntimeInitialized === "function") {
-            cv.onRuntimeInitialized = () => done(cv);
-            return;
-          }
-          fail("OpenCV package resolved but did not expose the runtime object.");
+        // Normalize Promise-like exports before awaiting. Some bundlers expose a CJS/interop
+        // wrapper where the exported value is Promise-like but not a real native Promise instance,
+        // so calling `.then` directly on it can throw "incompatible receiver".
+        const resolved = await Promise.resolve(cvModule);
+
+        if (resolved?.Mat) {
+          done(resolved);
           return;
         }
 
-        if (cvModule?.Mat) {
-          done(cvModule);
+        if (resolved && typeof resolved.onRuntimeInitialized === "function") {
+          resolved.onRuntimeInitialized = () => done(resolved);
           return;
         }
 
-        if (cvModule && typeof cvModule.onRuntimeInitialized === "function") {
-          cvModule.onRuntimeInitialized = () => done(cvModule);
-          return;
+        if (resolved && typeof resolved.then === "function") {
+          const nested = await Promise.resolve(resolved);
+          if (nested?.Mat) {
+            done(nested);
+            return;
+          }
+          if (nested && typeof nested.onRuntimeInitialized === "function") {
+            nested.onRuntimeInitialized = () => done(nested);
+            return;
+          }
         }
 
         fail("OpenCV package import did not produce a valid runtime object.");
