@@ -102,6 +102,9 @@ function App() {
   } | null>(null);
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [distance, setDistance] = useState<number | null>(null);
+  const [debugFrames, setDebugFrames] = useState<
+    Array<{ id: number; src: string; widthPx: number | null; distance: number | null }>
+  >([]);
   const [recording, setRecording] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [trialHistory, setTrialHistory] = useState<TrialRecord[]>([]);
@@ -453,6 +456,76 @@ function App() {
     void cropCameraTarget(normalized);
   };
 
+  const captureDebugFrame = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || !cameraOn || trackingMode !== "target" || !targetSet) {
+      setTargetError("A target must be active before capturing a debug frame.");
+      return;
+    }
+
+    try {
+      const tracker = await getTargetTracker();
+      const resultList = tracker.detectForVideo(video, performance.now());
+      const firstTarget = resultList.targets[0];
+      if (!firstTarget) {
+        setTargetError("No target was detected in the current frame.");
+        return;
+      }
+
+      const widthPx = targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight);
+      const frameDistance = widthPx
+        ? distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale)
+        : null;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const corners = firstTarget.corners;
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x * canvas.width, corners[0].y * canvas.height);
+      corners.slice(1).forEach((corner) => {
+        ctx.lineTo(corner.x * canvas.width, corner.y * canvas.height);
+      });
+      ctx.closePath();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "#22d3ee";
+      ctx.stroke();
+
+      const label = `Estimated distance: ${frameDistance !== null ? `${frameDistance.toFixed(2)} m` : "n/a"}`;
+      const fontSize = 18;
+      ctx.font = `600 ${fontSize}px sans-serif`;
+      const metrics = ctx.measureText(label);
+      const boxX = 16;
+      const boxY = 18;
+      const boxWidth = metrics.width + 24;
+      const boxHeight = fontSize + 16;
+
+      ctx.fillStyle = "rgba(15, 23, 42, 0.7)";
+      ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+      ctx.strokeStyle = "#22d3ee";
+      ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+      ctx.fillStyle = "#e2f4ff";
+      ctx.fillText(label, boxX + 12, boxY + 26);
+
+      const src = canvas.toDataURL("image/png");
+      setDebugFrames((prev) => {
+        const next = [
+          { id: Date.now() + Math.random(), src, widthPx, distance: frameDistance },
+          ...prev,
+        ].slice(0, 3);
+        return next;
+      });
+      setTargetError(null);
+    } catch (e) {
+      console.error("debug frame capture failed", e);
+      setTargetError("Could not capture a debug frame.");
+    }
+  }, [cameraOn, focalScale, ipdMm, targetSet, trackingMode]);
+
   const resetActiveTrial = useCallback(() => {
     samplesRef.current = [];
     lastDistanceRef.current = null;
@@ -698,29 +771,47 @@ function App() {
         <option value="face">Face tracking</option>
         <option value="target">Image target tracking</option>
       </select>
-      <div
-        className="relative mx-auto flex max-w-[280px] touch-none justify-center overflow-hidden rounded-md bg-black"
-        onPointerDown={trackingMode === "target" && cameraOn ? handleCropPointerDown : undefined}
-        onPointerMove={trackingMode === "target" && cameraOn ? handleCropPointerMove : undefined}
-        onPointerUp={trackingMode === "target" && cameraOn ? handleCropPointerUp : undefined}
-      >
-        <video
-          ref={videoRef}
-          className="aspect-video w-full max-w-[280px]"
-          playsInline
-          muted
-          style={{ transform: "scaleX(-1)" }}
-        />
-        {trackingMode === "target" && cameraOn && cropSelection && (
+      <div className="flex items-start gap-3">
+        <div className="flex-1">
           <div
-            className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20"
-            style={{
-              left: cropSelection.left,
-              top: cropSelection.top,
-              width: cropSelection.width,
-              height: cropSelection.height,
-            }}
-          />
+            className="relative mx-auto flex max-w-[280px] touch-none justify-center overflow-hidden rounded-md bg-black"
+            onPointerDown={trackingMode === "target" && cameraOn ? handleCropPointerDown : undefined}
+            onPointerMove={trackingMode === "target" && cameraOn ? handleCropPointerMove : undefined}
+            onPointerUp={trackingMode === "target" && cameraOn ? handleCropPointerUp : undefined}
+          >
+            <video
+              ref={videoRef}
+              className="aspect-video w-full max-w-[280px]"
+              playsInline
+              muted
+              style={{ transform: "scaleX(-1)" }}
+            />
+            {trackingMode === "target" && cameraOn && cropSelection && (
+              <div
+                className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20"
+                style={{
+                  left: cropSelection.left,
+                  top: cropSelection.top,
+                  width: cropSelection.width,
+                  height: cropSelection.height,
+                }}
+              />
+            )}
+          </div>
+        </div>
+
+        {trackingMode === "target" && debugFrames.length > 0 && (
+          <div className="flex w-[170px] shrink-0 flex-col gap-2">
+            {debugFrames.map((frame) => (
+              <div key={frame.id} className="overflow-hidden rounded-md border border-slate-700 bg-slate-950">
+                <img src={frame.src} alt="Debug target frame" className="aspect-video w-full object-cover" />
+                <div className="space-y-1 px-2 py-1 text-[10px] text-slate-300">
+                  <div>width: {frame.widthPx !== null ? `${frame.widthPx.toFixed(0)} px` : "—"}</div>
+                  <div>dist: {frame.distance !== null ? `${frame.distance.toFixed(2)} m` : "—"}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
       <div className="mt-3 flex items-center justify-between text-sm">
@@ -760,6 +851,14 @@ function App() {
               Select region
             </Button>
           </div>
+          <Button
+            onClick={() => void captureDebugFrame()}
+            variant="secondary"
+            disabled={!cameraOn || !targetSet || trackingMode !== "target"}
+            className="w-full"
+          >
+            Capture debug frame ({debugFrames.length}/3)
+          </Button>
           <p className="text-[11px] text-slate-500">
             {targetSet
               ? targetDetected
