@@ -803,7 +803,6 @@ function App() {
               className="aspect-video w-full max-w-[280px]"
               playsInline
               muted
-              style={{ transform: "scaleX(-1)" }}
             />
             {trackingMode === "target" && cameraOn && cropSelection && (
               <div

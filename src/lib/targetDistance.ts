@@ -314,10 +314,9 @@ class ImageTargetTrackerImpl {
     const frameGray = new cv.Mat();
     cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
 
-    // For a printed paper target, template matching is more robust than ORB feature matching.
-    // We search the full frame at multiple scales, but we keep the acceptance threshold low enough
-    // to avoid missing a valid target just because it is slightly skewed, partially occluded, or
-    // not perfectly aligned with the saved template.
+    // The selected crop is only an initialization template. It must not constrain the match to a
+    // sub-region of the frame. We search the entire video frame at multiple scales and accept only
+    // candidates that match the real target well enough to be plausible.
     const scales = [0.45, 0.6, 0.8, 1.0, 1.25, 1.5, 1.8];
     const frameWidth =
       frameCanvas instanceof HTMLVideoElement
@@ -329,24 +328,27 @@ class ImageTargetTrackerImpl {
         : (frameCanvas as HTMLCanvasElement).height;
     let bestScore = 0,
       bestLoc = { x: 0, y: 0 },
-      bestScale = 1,
       bestSize = { w: 0, h: 0 };
 
     for (const s of scales) {
       const targetW = Math.round(this.targetSize.w * s);
       const targetH = Math.round(this.targetSize.h * s);
       if (targetW < 20 || targetH < 20 || targetW > frameGray.cols * 0.9 || targetH > frameGray.rows * 0.9) continue;
+
       const resized = new cv.Mat();
       cv.resize(this.targetGray, resized, new cv.Size(targetW, targetH), 0, 0, cv.INTER_AREA);
+
       const result = new cv.Mat();
       cv.matchTemplate(frameGray, resized, result, cv.TM_CCOEFF_NORMED);
       const minMax = cv.minMaxLoc(result);
-      if (minMax.maxVal > bestScore) {
-        bestScore = minMax.maxVal;
+
+      const score = Number(minMax.maxVal ?? 0);
+      if (score > bestScore) {
+        bestScore = score;
         bestLoc = minMax.maxLoc;
-        bestScale = s;
         bestSize = { w: targetW, h: targetH };
       }
+
       resized.delete();
       result.delete();
     }
@@ -354,21 +356,25 @@ class ImageTargetTrackerImpl {
     frameMat.delete();
     frameGray.delete();
 
-    if (bestScore < 0.3) return null;
+    // A valid target must be found somewhere within the full image; reject obvious background matches.
+    if (bestScore < 0.18 || bestSize.w <= 0 || bestSize.h <= 0) return null;
 
     const x = bestLoc.x,
       y = bestLoc.y;
+
+    const widthPx = bestSize.w;
+    const heightPx = bestSize.h;
 
     return {
       detected: true,
       corners: [
         { x: x / frameWidth, y: y / frameHeight },
-        { x: (x + bestSize.w) / frameWidth, y: y / frameHeight },
-        { x: (x + bestSize.w) / frameWidth, y: (y + bestSize.h) / frameHeight },
-        { x: x / frameWidth, y: (y + bestSize.h) / frameHeight },
+        { x: (x + widthPx) / frameWidth, y: y / frameHeight },
+        { x: (x + widthPx) / frameWidth, y: (y + heightPx) / frameHeight },
+        { x: x / frameWidth, y: (y + heightPx) / frameHeight },
       ],
-      widthPx: bestSize.w,
-      heightPx: bestSize.h,
+      widthPx,
+      heightPx,
       confidence: bestScore,
     };
   }
