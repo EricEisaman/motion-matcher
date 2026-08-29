@@ -108,6 +108,7 @@ function App() {
   const startTimeRef = useRef<number>(0);
   const samplesRef = useRef<Sample[]>([]);
   const lastDistanceRef = useRef<number | null>(null);
+  const distanceFilterRef = useRef<number | null>(null);
 
   const [ipdMm, setIpdMm] = useState<number>(DEFAULT_IPD_MM);
   const [focalScale, setFocalScale] = useState<number>(1);
@@ -196,45 +197,77 @@ function App() {
         try {
           const ts = performance.now();
           if (ts !== lastTs) {
-            const res =
-              trackingMode === "face"
-                ? (await getFaceLandmarker()).detectForVideo(video, ts)
-                : (await getTargetTracker()).detectForVideo(video, ts);
             lastTs = ts;
-            const widthPx =
-              trackingMode === "face"
-                ? ipdPxFromResult(res, video.videoWidth, video.videoHeight)
-                : res.targets[0]
-                  ? targetWidthPxFromResult(res.targets[0], video.videoWidth, video.videoHeight)
-                  : null;
-            setTargetDetected(Boolean(widthPx));
-            if (widthPx) {
-              const d =
-                trackingMode === "face"
-                  ? distanceFromIpdPx(widthPx, video.videoWidth, ipdMm, focalScale)
-                  : distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale);
-              if (Number.isFinite(d) && d > 0) {
-                lastDistanceRef.current = d;
-                setDistance(d);
-                if (recording) {
+
+            if (trackingMode === "face") {
+              const res = (await getFaceLandmarker()).detectForVideo(video, ts);
+              const widthPx = ipdPxFromResult(res as any, video.videoWidth, video.videoHeight);
+              setTargetDetected(Boolean(widthPx));
+              if (widthPx) {
+                const rawDistance = distanceFromIpdPx(widthPx, video.videoWidth, ipdMm, focalScale);
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 20) {
+                  const prev = distanceFilterRef.current ?? rawDistance;
+                  const smoothed = prev * 0.7 + rawDistance * 0.3;
+                  distanceFilterRef.current = smoothed;
+                  lastDistanceRef.current = smoothed;
+                  setDistance(smoothed);
+                  if (recording) {
+                    const t = (performance.now() - startTimeRef.current) / 1000;
+                    if (t <= target.duration) {
+                      const s = { t, d: smoothed };
+                      samplesRef.current.push(s);
+                      setSamples([...samplesRef.current]);
+                    } else {
+                      setRecording(false);
+                      finalizeRecording(samplesRef.current);
+                    }
+                  }
+                } else if (lastDistanceRef.current !== null && recording) {
                   const t = (performance.now() - startTimeRef.current) / 1000;
                   if (t <= target.duration) {
-                    const s = { t, d };
-                    samplesRef.current.push(s);
+                    samplesRef.current.push({ t, d: lastDistanceRef.current });
                     setSamples([...samplesRef.current]);
                   } else {
                     setRecording(false);
                     finalizeRecording(samplesRef.current);
                   }
                 }
-              } else if (lastDistanceRef.current !== null && recording) {
-                const t = (performance.now() - startTimeRef.current) / 1000;
-                if (t <= target.duration) {
-                  samplesRef.current.push({ t, d: lastDistanceRef.current });
-                  setSamples([...samplesRef.current]);
-                } else {
-                  setRecording(false);
-                  finalizeRecording(samplesRef.current);
+              }
+            } else {
+              const res = (await getTargetTracker()).detectForVideo(video, ts);
+              const firstTarget = res.targets[0];
+              const widthPx = firstTarget
+                ? targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight)
+                : null;
+              setTargetDetected(Boolean(widthPx));
+              if (widthPx) {
+                const rawDistance = distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale);
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 20) {
+                  const prev = distanceFilterRef.current ?? rawDistance;
+                  const smoothed = prev * 0.7 + rawDistance * 0.3;
+                  distanceFilterRef.current = smoothed;
+                  lastDistanceRef.current = smoothed;
+                  setDistance(smoothed);
+                  if (recording) {
+                    const t = (performance.now() - startTimeRef.current) / 1000;
+                    if (t <= target.duration) {
+                      const s = { t, d: smoothed };
+                      samplesRef.current.push(s);
+                      setSamples([...samplesRef.current]);
+                    } else {
+                      setRecording(false);
+                      finalizeRecording(samplesRef.current);
+                    }
+                  }
+                } else if (lastDistanceRef.current !== null && recording) {
+                  const t = (performance.now() - startTimeRef.current) / 1000;
+                  if (t <= target.duration) {
+                    samplesRef.current.push({ t, d: lastDistanceRef.current });
+                    setSamples([...samplesRef.current]);
+                  } else {
+                    setRecording(false);
+                    finalizeRecording(samplesRef.current);
+                  }
                 }
               }
             }
@@ -311,7 +344,7 @@ function App() {
       setTargetDetected(false);
 
       const roi = {
-        x: 1 - selection.left - selection.width,
+        x: selection.left,
         y: selection.top,
         w: selection.width,
         h: selection.height,
@@ -385,6 +418,7 @@ function App() {
   const resetActiveTrial = useCallback(() => {
     samplesRef.current = [];
     lastDistanceRef.current = null;
+    distanceFilterRef.current = null;
     setRecording(false);
     setSamples([]);
     setRegion(null);
@@ -495,8 +529,10 @@ function App() {
 
   const calibrate = () => {
     const known = parseFloat(calibKnown);
-    if (!known || !distance) return;
+    if (!Number.isFinite(known) || known <= 0) return;
+    if (!Number.isFinite(distance ?? NaN) || distance == null || distance <= 0) return;
     setFocalScale((s) => s * (known / distance));
+    distanceFilterRef.current = distance;
   };
 
   const userSeries: SeriesPoint[] = useMemo(() => {
@@ -587,6 +623,7 @@ function App() {
       rows.push(`${s.t.toFixed(4)},${s.d.toFixed(4)}`);
     }
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `kinematics-${Date.now()}.csv`;

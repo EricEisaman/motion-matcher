@@ -28,19 +28,7 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       // TanStack Start plugin must come before React
       tanstackStart({
-        router: {
-          autoCodeSplitting: true,
-        },
-        // For static deployment: configure prerendering
-        ssr: {
-          prerender: {
-            enabled: true,
-            crawlLinks: true,
-            autoSubfolderIndex: true,
-            concurrency: 14,
-            failOnError: false,
-          },
-        },
+        router: {},
       }),
       react(),
       tsconfigPaths(),

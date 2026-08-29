@@ -55,11 +55,11 @@ async function loadCv(): Promise<any> {
 
     void (async () => {
       try {
-        const runtime = (cvModuleNs as any).default ?? cvModuleNs;
+        const runtime: any = (cvModuleNs as any).default ?? cvModuleNs;
 
         // Some bundlers expose the package as a Promise-like object; unwrap it by invoking
         // its own .then method rather than calling Promise.resolve on the wrapper.
-        const resolved = await new Promise((resolve, reject) => {
+        const resolved: any = await new Promise((resolve, reject) => {
           if (runtime && typeof runtime.then === "function") {
             runtime.then(resolve, reject);
             return;
@@ -123,21 +123,21 @@ class ImageTargetTrackerImpl {
       canvas = document.createElement("canvas");
       canvas.width = source.width;
       canvas.height = source.height;
-      canvas.getContext("2d")!.putImageData(source, 0, 0);
+      canvas.getContext("2d", { willReadFrequently: true })!.putImageData(source, 0, 0);
     } else if (source instanceof HTMLCanvasElement) {
       canvas = source;
     } else if (source instanceof ImageBitmap) {
       canvas = document.createElement("canvas");
       canvas.width = source.width;
       canvas.height = source.height;
-      canvas.getContext("2d")!.drawImage(source, 0, 0);
+      canvas.getContext("2d", { willReadFrequently: true })!.drawImage(source, 0, 0);
     } else if (source instanceof HTMLVideoElement || source instanceof HTMLImageElement) {
       canvas = document.createElement("canvas");
       canvas.width =
         (source as any).videoWidth || (source as any).naturalWidth || (source as any).width;
       canvas.height =
         (source as any).videoHeight || (source as any).naturalHeight || (source as any).height;
-      canvas.getContext("2d")!.drawImage(source as any, 0, 0, canvas.width, canvas.height);
+      canvas.getContext("2d", { willReadFrequently: true })!.drawImage(source as any, 0, 0, canvas.width, canvas.height);
     } else {
       throw new Error("Unsupported target source");
     }
@@ -369,7 +369,7 @@ class ImageTargetTrackerImpl {
       this.frameCanvas.width = video.videoWidth;
       this.frameCanvas.height = video.videoHeight;
     }
-    this.frameCanvas.getContext("2d")!.drawImage(video, 0, 0);
+    this.frameCanvas.getContext("2d", { willReadFrequently: true })!.drawImage(video, 0, 0);
     const r = this.detectFromCanvas(this.frameCanvas);
     return r ? { targets: [r] } : { targets: [] };
   }
@@ -438,9 +438,9 @@ export async function setTargetFromVideoCrop(
     sw = r.w * vw,
     sh = r.h * vh;
   const canvas = document.createElement("canvas");
-  canvas.width = sw;
-  canvas.height = sh;
-  canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  canvas.width = Math.max(1, Math.round(sw));
+  canvas.height = Math.max(1, Math.round(sh));
+  canvas.getContext("2d", { willReadFrequently: true })!.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   return setTargetFromElement(canvas);
 }
 
