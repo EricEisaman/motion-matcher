@@ -205,7 +205,7 @@ function App() {
               setTargetDetected(Boolean(widthPx));
               if (widthPx) {
                 const rawDistance = distanceFromIpdPx(widthPx, video.videoWidth, ipdMm, focalScale);
-                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 20) {
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 100) {
                   const prev = distanceFilterRef.current ?? rawDistance;
                   const smoothed = prev * 0.7 + rawDistance * 0.3;
                   distanceFilterRef.current = smoothed;
@@ -239,10 +239,17 @@ function App() {
               const widthPx = firstTarget
                 ? targetWidthPxFromResult(firstTarget, video.videoWidth, video.videoHeight)
                 : null;
+              console.debug("target loop: frame result", {
+                hasTarget: Boolean(firstTarget),
+                widthPx,
+                distanceEstimate: widthPx
+                  ? distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale)
+                  : null,
+              });
               setTargetDetected(Boolean(widthPx));
               if (widthPx) {
                 const rawDistance = distanceFromTargetWidthPx(widthPx, video.videoWidth, ipdMm, focalScale);
-                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 20) {
+                if (Number.isFinite(rawDistance) && rawDistance > 0 && rawDistance < 100) {
                   const prev = distanceFilterRef.current ?? rawDistance;
                   const smoothed = prev * 0.7 + rawDistance * 0.3;
                   distanceFilterRef.current = smoothed;
@@ -311,10 +318,31 @@ function App() {
         height: image.height,
       });
 
+      const targetWidthPx = Math.max(1, Math.min(image.width, image.height));
+      const detectedVideoWidth = videoRef.current?.videoWidth ?? 640;
+      const estimatedDistance = distanceFromTargetWidthPx(
+        targetWidthPx,
+        detectedVideoWidth,
+        ipdMm,
+        focalScale,
+      );
+
       await getTargetTracker();
       console.debug("upload target: tracker ready");
       await setTargetFromElement(image);
       image.close();
+
+      if (Number.isFinite(estimatedDistance) && estimatedDistance > 0) {
+        distanceFilterRef.current = estimatedDistance;
+        lastDistanceRef.current = estimatedDistance;
+        setDistance(estimatedDistance);
+        console.debug("upload target: baseline distance", {
+          targetWidthPx,
+          detectedVideoWidth,
+          estimatedDistance,
+        });
+      }
+
       setTargetSet(true);
       console.debug("upload target: success");
     } catch (e) {
@@ -688,7 +716,7 @@ function App() {
       <div className="mt-3 flex items-center justify-between text-sm">
         <span className="text-slate-400">Distance</span>
         <span className="font-mono text-sky-400">
-          {distance ? `${distance.toFixed(2)} m` : "—"}
+          {distance !== null ? `${distance.toFixed(2)} m` : "—"}
         </span>
       </div>
       {trackingMode === "target" && (
