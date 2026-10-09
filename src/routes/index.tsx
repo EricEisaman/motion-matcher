@@ -820,9 +820,9 @@ function App() {
           </div>
         )}
       </div>
-      <div className="mt-3 flex items-center justify-between text-sm">
+      <div className="mt-3 flex flex-col items-start gap-1 text-sm">
         <span className="text-slate-400">Distance</span>
-        <span className="font-mono text-sky-400">
+        <span className="font-mono tabular-nums text-[1.8em] leading-none text-sky-400">
           {distance !== null ? `${distance.toFixed(2)} m` : "—"}
         </span>
       </div>
