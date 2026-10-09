@@ -21,12 +21,7 @@ import {
   type MotionMode,
   type TargetGraph,
 } from "@/lib/targets";
-import {
-  linearRegression,
-  quadraticRegression,
-  type LinearFit,
-  type QuadraticFit,
-} from "@/lib/regression";
+import { fitRegression, type RegressionFit } from "@/lib/regression";
 import { Graph, type SeriesPoint } from "@/components/Graph";
 
 export const Route = createFileRoute("/")({
@@ -126,10 +121,8 @@ function App() {
   const [distScale, setDistScale] = useState(1);
 
   const [region, setRegion] = useState<{ t0: number; t1: number } | null>(null);
-  const [regionLinear, setRegionLinear] = useState<LinearFit | null>(null);
-  const [regionQuad, setRegionQuad] = useState<QuadraticFit | null>(null);
-  const [globalLinear, setGlobalLinear] = useState<LinearFit | null>(null);
-  const [globalQuad, setGlobalQuad] = useState<QuadraticFit | null>(null);
+  const [regionRegression, setRegionRegression] = useState<RegressionFit | null>(null);
+  const [globalRegression, setGlobalRegression] = useState<RegressionFit | null>(null);
   const [activeView, setActiveView] = useState<"instructions" | "settings" | "graph">(
     "instructions",
   );
@@ -552,10 +545,8 @@ function App() {
     setRecording(false);
     setSamples([]);
     setRegion(null);
-    setRegionLinear(null);
-    setRegionQuad(null);
-    setGlobalLinear(null);
-    setGlobalQuad(null);
+    setRegionRegression(null);
+    setGlobalRegression(null);
     setTimeOffset(0);
     setDistOffset(0);
     setDistScale(1);
@@ -644,12 +635,11 @@ function App() {
       if (completedSamples.length) {
         setSamples([...completedSamples]);
         const series = buildUserSeriesForSamples(completedSamples);
-        setGlobalLinear(linearRegression(series));
-        setGlobalQuad(quadraticRegression(series));
+        setGlobalRegression(fitRegression(series, target.regression));
       }
       saveCurrentTrial(completedSamples);
     },
-    [buildUserSeriesForSamples, saveCurrentTrial],
+    [buildUserSeriesForSamples, saveCurrentTrial, target.regression],
   );
 
   const stopRecording = () => {
@@ -735,16 +725,14 @@ function App() {
   }, [region, userSeries]);
 
   const fitRegion = () => {
-    setRegionLinear(linearRegression(regionPoints));
-    setRegionQuad(quadraticRegression(regionPoints));
+    setRegionRegression(fitRegression(regionPoints, target.regression));
   };
 
   const fitAll = () => {
     const series = buildUserSeriesForSamples(
       samplesRef.current.length ? samplesRef.current : samples,
     );
-    setGlobalLinear(linearRegression(series));
-    setGlobalQuad(quadraticRegression(series));
+    setGlobalRegression(fitRegression(series, target.regression));
   };
 
   const downloadCsv = () => {
@@ -1047,36 +1035,20 @@ function App() {
           </Button>
         </div>
         <div className="mt-3 space-y-2 text-xs">
-          {regionLinear && (
+          {regionRegression && (
             <FitRow
               color="#a3e635"
-              title="Region linear"
-              fit={regionLinear.formula}
-              r2={regionLinear.r2}
+              title={`Region ${regionRegression.kind}`}
+              fit={regionRegression.formula}
+              r2={regionRegression.r2}
             />
           )}
-          {regionQuad && (
-            <FitRow
-              color="#f472b6"
-              title="Region quadratic"
-              fit={regionQuad.formula}
-              r2={regionQuad.r2}
-            />
-          )}
-          {globalLinear && (
+          {globalRegression && (
             <FitRow
               color="#22d3ee"
-              title="Global linear"
-              fit={globalLinear.formula}
-              r2={globalLinear.r2}
-            />
-          )}
-          {globalQuad && (
-            <FitRow
-              color="#c084fc"
-              title="Global quadratic"
-              fit={globalQuad.formula}
-              r2={globalQuad.r2}
+              title={`Global ${globalRegression.kind}`}
+              fit={globalRegression.formula}
+              r2={globalRegression.r2}
             />
           )}
         </div>
@@ -1114,10 +1086,8 @@ function App() {
         <div className="mb-3 flex flex-wrap gap-4 text-xs">
           <Legend color="#f59e0b" label="target" />
           <Legend color="#38bdf8" label="you" />
-          {regionLinear && <Legend color="#a3e635" label="region linear" />}
-          {regionQuad && <Legend color="#f472b6" label="region quad" />}
-          {globalLinear && <Legend color="#22d3ee" label="global linear" />}
-          {globalQuad && <Legend color="#c084fc" label="global quad" />}
+          {regionRegression && <Legend color="#a3e635" label={`region ${regionRegression.kind}`} />}
+          {globalRegression && <Legend color="#22d3ee" label={`global ${globalRegression.kind}`} />}
         </div>
         <div className="h-[70vh] min-h-[540px]">
           <Graph
@@ -1131,10 +1101,8 @@ function App() {
             yLabel={yLabel}
             selectedRegion={region}
             onSelectRegion={setRegion}
-            linearFit={regionLinear}
-            quadraticFit={regionQuad}
-            globalLinearFit={globalLinear}
-            globalQuadraticFit={globalQuad}
+            regressionFit={regionRegression}
+            globalRegressionFit={globalRegression}
           />
         </div>
       </section>

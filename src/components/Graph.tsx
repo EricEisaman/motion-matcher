@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import type { LinearFit, QuadraticFit } from "@/lib/regression";
+import type { RegressionFit } from "@/lib/regression";
 
 export interface SeriesPoint {
   t: number;
@@ -17,10 +17,8 @@ export interface GraphProps {
   yLabel: string;
   onSelectRegion?: (r: { t0: number; t1: number } | null) => void;
   selectedRegion?: { t0: number; t1: number } | null;
-  linearFit?: LinearFit | null;
-  quadraticFit?: QuadraticFit | null;
-  globalLinearFit?: LinearFit | null;
-  globalQuadraticFit?: QuadraticFit | null;
+  regressionFit?: RegressionFit | null;
+  globalRegressionFit?: RegressionFit | null;
 }
 
 interface Readout {
@@ -43,10 +41,8 @@ export function Graph(props: GraphProps) {
     yLabel,
     onSelectRegion,
     selectedRegion,
-    linearFit,
-    quadraticFit,
-    globalLinearFit,
-    globalQuadraticFit,
+    regressionFit,
+    globalRegressionFit,
   } = props;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -183,21 +179,8 @@ export function Graph(props: GraphProps) {
       ctx.stroke();
       ctx.setLineDash([]);
     };
-    if (linearFit) drawFit((t) => linearFit.m * t + linearFit.b, "#a3e635", [6, 4]);
-    if (quadraticFit)
-      drawFit(
-        (t) => quadraticFit.a * t * t + quadraticFit.b * t + quadraticFit.c,
-        "#f472b6",
-        [4, 4],
-      );
-    if (globalLinearFit)
-      drawFit((t) => globalLinearFit.m * t + globalLinearFit.b, "#22d3ee", [10, 4]);
-    if (globalQuadraticFit)
-      drawFit(
-        (t) => globalQuadraticFit.a * t * t + globalQuadraticFit.b * t + globalQuadraticFit.c,
-        "#c084fc",
-        [2, 4],
-      );
+    if (regressionFit) drawFit(regressionFit.predict, "#a3e635", [6, 4]);
+    if (globalRegressionFit) drawFit(globalRegressionFit.predict, "#22d3ee", [10, 4]);
 
     // Drag rectangle
     if (drag) {
@@ -248,10 +231,8 @@ export function Graph(props: GraphProps) {
     xLabel,
     yLabel,
     selectedRegion,
-    linearFit,
-    quadraticFit,
-    globalLinearFit,
-    globalQuadraticFit,
+    regressionFit,
+    globalRegressionFit,
     drag,
     readout,
     pad.l,
